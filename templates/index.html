@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Local Admin Scanner</title>
+    <style>
+        *{box-sizing:border-box}
+        body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:15px;background:#f0f2f5;color:#333}
+        h1{margin:0 0 15px;color:#1a1a2e;font-size:22px}
+        .container{max-width:1200px;margin:0 auto}
+        .nav{margin-bottom:12px;overflow:hidden}
+        .nav a{color:#4a90d9;text-decoration:none;font-size:14px;margin-right:15px}
+        .nav a:hover{text-decoration:underline}
+        .lang-switch{float:right}
+        .lang-btn{padding:4px 12px;font-size:12px;font-weight:bold;border:1px solid #ccc;border-radius:3px;cursor:pointer;margin-left:4px;background:#fff;color:#333}
+        .lang-btn.active{background:#4a90d9;color:#fff;border-color:#4a90d9}
+        .card{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:15px;margin-bottom:12px}
+        .card h3{margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid #4a90d9;color:#1a1a2e;font-size:16px}
+        .form-row{margin-bottom:8px}
+        .form-row label{display:block;font-weight:bold;margin-bottom:2px;font-size:12px;color:#555}
+        .form-row input,.form-row textarea{width:100%;padding:5px 7px;border:1px solid #ccc;border-radius:3px;font-size:13px}
+        .form-row textarea{height:50px;resize:vertical;font-family:Consolas,monospace;font-size:12px}
+        .form-row-inline{margin-bottom:8px}
+        .form-row-inline label{display:inline;font-weight:normal;font-size:13px;cursor:pointer}
+        .cols{overflow:hidden}
+        .col-left{float:left;width:48%}
+        .col-right{float:right;width:48%}
+        .btn{padding:8px 22px;font-size:13px;font-weight:bold;border:none;border-radius:3px;cursor:pointer;margin-right:6px;margin-top:8px}
+        .btn-start{background:#4a90d9;color:#fff}
+        .btn-start:hover{background:#3a7bc8}
+        .btn-start[disabled]{background:#aaa;cursor:default}
+        .btn-stop{background:#d9534f;color:#fff}
+        .btn-stop:hover{background:#c9302c}
+        .btn-stop[disabled]{background:#aaa;cursor:default}
+        .btn-save{background:#5cb85c;color:#fff;font-size:11px;padding:4px 12px}
+        .btn-save:hover{background:#4cae4c}
+        .stats{overflow:hidden;margin-bottom:8px}
+        .stat-item{float:left;width:14.28%;text-align:center;padding:6px}
+        .stat-val{font-size:22px;font-weight:bold;color:#4a90d9}
+        .stat-label{font-size:10px;color:#888;text-transform:uppercase}
+        .stat-err .stat-val{color:#d9534f}
+        .stat-ok .stat-val{color:#5cb85c}
+        .stat-eta .stat-val{color:#9b59b6}
+        .progress-wrap{background:#e0e0e0;height:20px;border-radius:10px;overflow:hidden;margin:8px 0;position:relative}
+        .progress-bar{height:100%;background:#4a90d9;width:0;border-radius:10px}
+        .progress-text{position:absolute;top:0;left:0;right:0;text-align:center;line-height:20px;font-size:11px;font-weight:bold;color:#333}
+        .current-host{font-size:12px;color:#666;margin-bottom:4px}
+        #logBox{height:350px;overflow-y:auto;background:#1a1a2e;color:#e0e0e0;font-family:Consolas,monospace;font-size:11px;padding:8px;border-radius:4px}
+        .log-ok{color:#5cb85c}
+        .log-err{color:#ff6b6b}
+        .log-info{color:#5bc0de}
+        .log-done{color:#f0ad4e;font-weight:bold}
+        .log-builtin{color:#888}
+        .log-risk-high{color:#ff4444;font-weight:bold}
+        .log-risk-medium{color:#ffaa00}
+        .download-links{margin-top:8px}
+        .download-links a{display:inline-block;padding:6px 16px;background:#5cb85c;color:#fff;text-decoration:none;border-radius:3px;margin-right:6px;font-weight:bold;font-size:13px}
+        .download-links a:hover{background:#4cae4c}
+        .download-links a.dl-summary{background:#f0ad4e}
+        .download-links a.dl-view{background:#5bc0de}
+        .filter-row{margin-bottom:8px}
+        .filter-row input{width:250px;padding:4px 8px;font-size:12px}
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="nav">
+        <a href="/summary" target="_blank" data-i18n="nav_summary">View Summary &rarr;</a>
+        <span class="lang-switch">
+            <button class="lang-btn" onclick="setLang('en')">EN</button>
+            <button class="lang-btn" onclick="setLang('ru')">RU</button>
+        </span>
+    </div>
+    <h1 data-i18n="title">Local Administrators Scanner</h1>
+
+    <div class="card">
+        <h3>
+            <span data-i18n="settings_title">Connection Settings</span>
+            <button class="btn btn-save" onclick="saveSettings()" data-i18n="btn_save">Save</button>
+            <button class="btn btn-save" onclick="loadSettings()" data-i18n="btn_load">Load</button>
+        </h3>
+        <div class="cols">
+            <div class="col-left">
+                <div class="form-row"><label data-i18n="lbl_dc">Domain Controller:</label><input type="text" id="cfgServer"></div>
+                <div class="form-row"><label data-i18n="lbl_domain">Domain (FQDN):</label><input type="text" id="cfgDomain"></div>
+                <div class="form-row"><label data-i18n="lbl_netbios">NetBIOS Domain:</label><input type="text" id="cfgNetbios"></div>
+            </div>
+            <div class="col-right">
+                <div class="form-row"><label data-i18n="lbl_user">Username:</label><input type="text" id="cfgUser"></div>
+                <div class="form-row"><label data-i18n="lbl_pass">Password:</label><input type="password" id="cfgPass"></div>
+                <div class="form-row"><label data-i18n="lbl_threads">Max Threads:</label><input type="number" id="cfgThreads" value="20"></div>
+            </div>
+        </div>
+        <div class="form-row"><label data-i18n="lbl_ou_work">Workstations OU:</label><input type="text" id="cfgOuWork"></div>
+        <div class="form-row"><label data-i18n="lbl_ou_srv">Servers OU:</label><input type="text" id="cfgOuSrv"></div>
+        <div class="form-row"><label data-i18n="lbl_timeout">Host Timeout (sec):</label><input type="number" id="cfgTimeout" value="40"></div>
+        <div class="form-row"><label data-i18n="lbl_allowed">Allowed Admins (one per line):</label><textarea id="cfgAllowed" placeholder="DOMAIN\Admin1&#10;DOMAIN\HelpDesk"></textarea></div>
+        <div class="form-row-inline">
+            <label><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
+        </div>
+        <button class="btn btn-start" id="btnStart" onclick="doStart()" data-i18n="btn_start">Start Scan</button>
+        <button class="btn btn-stop" id="btnStop" onclick="doStop()" disabled data-i18n="btn_stop">Stop</button>
+    </div>
+
+    <div class="card">
+        <h3 data-i18n="progress_title">Progress</h3>
+        <div class="stats">
+            <div class="stat-item"><div class="stat-val" id="stProgress">0</div><div class="stat-label" data-i18n="st_scanned">Scanned</div></div>
+            <div class="stat-item"><div class="stat-val" id="stTotal">0</div><div class="stat-label" data-i18n="st_total">Total</div></div>
+            <div class="stat-item stat-ok"><div class="stat-val" id="stSuccess">0</div><div class="stat-label" data-i18n="st_success">Success</div></div>
+            <div class="stat-item stat-err"><div class="stat-val" id="stErrors">0</div><div class="stat-label" data-i18n="st_errors">Errors</div></div>
+            <div class="stat-item"><div class="stat-val" id="stFound">0</div><div class="stat-label" data-i18n="st_members">Members</div></div>
+            <div class="stat-item"><div class="stat-val" id="stSpeed">-</div><div class="stat-label" data-i18n="st_speed">hosts/min</div></div>
+            <div class="stat-item stat-eta"><div class="stat-val" id="stETA">-</div><div class="stat-label">ETA</div></div>
+        </div>
+        <div class="current-host"><span data-i18n="current">Current</span>: <span id="stCurrent">-</span></div>
+        <div class="progress-wrap"><div class="progress-bar" id="pBar"></div><div class="progress-text" id="pText">0%</div></div>
+        <div class="download-links" id="dlLinks"></div>
+    </div>
+
+    <div class="card">
+        <h3 data-i18n="log_title">Live Log</h3>
+        <div class="filter-row">
+            <input type="text" id="logFilter" data-i18n-placeholder="log_filter" placeholder="Filter..." onkeyup="filterLog()">
+            <label style="display:inline;margin-left:10px"><input type="checkbox" id="hideBuiltin" onchange="filterLog()"> <span data-i18n="log_hide_builtin">Hide builtin</span></label>
+            <label style="display:inline;margin-left:10px"><input type="checkbox" id="hideOk" onchange="filterLog()"> <span data-i18n="log_hide_ok">Hide OK</span></label>
+            <label style="display:inline;margin-left:10px"><input type="checkbox" id="hideErr" onchange="filterLog()"> <span data-i18n="log_hide_err">Hide errors</span></label>
+        </div>
+        <div id="logBox"></div>
+    </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════
+   LANGUAGE SYSTEM
+   ═══════════════════════════════════════ */
+var LANG = {
+    en: {
+        title: "Local Administrators Scanner",
+        nav_summary: "View Summary \u2192",
+        settings_title: "Connection Settings",
+        btn_save: "Save",
+        btn_load: "Load",
+        btn_start: "Start Scan",
+        btn_stop: "Stop",
+        lbl_dc: "Domain Controller:",
+        lbl_domain: "Domain (FQDN):",
+        lbl_netbios: "NetBIOS Domain:",
+        lbl_user: "Username:",
+        lbl_pass: "Password:",
+        lbl_threads: "Max Threads:",
+        lbl_ou_work: "Workstations OU:",
+        lbl_ou_srv: "Servers OU:",
+        lbl_timeout: "Host Timeout (sec):",
+        lbl_allowed: "Allowed Admins (one per line):",
+        lbl_expand: "Expand domain groups via LDAP",
+        progress_title: "Progress",
+        st_scanned: "Scanned",
+        st_total: "Total",
+        st_success: "Success",
+        st_errors: "Errors",
+        st_members: "Members",
+        st_speed: "hosts/min",
+        current: "Current",
+        log_title: "Live Log",
+        log_filter: "Filter...",
+        log_hide_builtin: "Hide builtin",
+        log_hide_ok: "Hide OK",
+        log_hide_err: "Hide errors",
+        scan_started: "Scan started...",
+        scan_stopping: "Stopping...",
+        scan_completed: "=== COMPLETED ===",
+        fill_fields: "Fill all connection fields!",
+        settings_saved: "Settings saved!",
+        no_saved: "No saved settings",
+        view_summary: "View Summary"
+    },
+    ru: {
+        title: "\u0421\u043a\u0430\u043d\u0435\u0440 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0445 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u043e\u0432",
+        nav_summary: "\u0421\u0432\u043e\u0434\u043a\u0430 \u2192",
+        settings_title: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f",
+        btn_save: "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c",
+        btn_load: "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c",
+        btn_start: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c",
+        btn_stop: "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c",
+        lbl_dc: "\u041a\u043e\u043d\u0442\u0440\u043e\u043b\u043b\u0435\u0440 \u0434\u043e\u043c\u0435\u043d\u0430:",
+        lbl_domain: "\u0414\u043e\u043c\u0435\u043d (FQDN):",
+        lbl_netbios: "NetBIOS \u0434\u043e\u043c\u0435\u043d:",
+        lbl_user: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:",
+        lbl_pass: "\u041f\u0430\u0440\u043e\u043b\u044c:",
+        lbl_threads: "\u041c\u0430\u043a\u0441. \u043f\u043e\u0442\u043e\u043a\u043e\u0432:",
+        lbl_ou_work: "OU \u0440\u0430\u0431\u043e\u0447\u0438\u0445 \u0441\u0442\u0430\u043d\u0446\u0438\u0439:",
+        lbl_ou_srv: "OU \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432:",
+        lbl_timeout: "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 \u0445\u043e\u0441\u0442\u0430 (\u0441\u0435\u043a):",
+        lbl_allowed: "\u0420\u0430\u0437\u0440\u0435\u0448\u0451\u043d\u043d\u044b\u0435 \u0430\u0434\u043c\u0438\u043d\u044b (\u043f\u043e \u043e\u0434\u043d\u043e\u043c\u0443 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443):",
+        lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP",
+        progress_title: "\u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441",
+        st_scanned: "\u041f\u0440\u043e\u0441\u043a\u0430\u043d.",
+        st_total: "\u0412\u0441\u0435\u0433\u043e",
+        st_success: "\u0423\u0441\u043f\u0435\u0445",
+        st_errors: "\u041e\u0448\u0438\u0431\u043a\u0438",
+        st_members: "\u0423\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0438",
+        st_speed: "\u0445\u043e\u0441\u0442/\u043c\u0438\u043d",
+        current: "\u0422\u0435\u043a\u0443\u0449\u0438\u0439",
+        log_title: "\u0416\u0443\u0440\u043d\u0430\u043b",
+        log_filter: "\u0424\u0438\u043b\u044c\u0442\u0440...",
+        log_hide_builtin: "\u0421\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u044b\u0435",
+        log_hide_ok: "\u0421\u043a\u0440\u044b\u0442\u044c OK",
+        log_hide_err: "\u0421\u043a\u0440\u044b\u0442\u044c \u043e\u0448\u0438\u0431\u043a\u0438",
+        scan_started: "\u0421\u043a\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u043e...",
+        scan_stopping: "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430...",
+        scan_completed: "=== \u0417\u0410\u0412\u0415\u0420\u0428\u0415\u041d\u041e ===",
+        fill_fields: "\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0432\u0441\u0435 \u043f\u043e\u043b\u044f!",
+        settings_saved: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u044b!",
+        no_saved: "\u041d\u0435\u0442 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0445 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043a",
+        view_summary: "\u0421\u0432\u043e\u0434\u043a\u0430"
+    }
+};
+
+var currentLang = "en";
+
+function t(key){
+    var dict = LANG[currentLang] || LANG.en;
+    return dict[key] || (LANG.en[key] || key)
+}
+
+function setLang(lang){
+    currentLang = lang;
+    try{ localStorage.setItem("scannerLang", lang) }catch(e){}
+    applyLang();
+    updateLangButtons()
+}
+
+function applyLang(){
+    var els = document.querySelectorAll("[data-i18n]");
+    for(var i = 0; i < els.length; i++){
+        var key = els[i].getAttribute("data-i18n");
+        els[i].innerHTML = t(key)
+    }
+    var phs = document.querySelectorAll("[data-i18n-placeholder]");
+    for(i = 0; i < phs.length; i++){
+        var pk = phs[i].getAttribute("data-i18n-placeholder");
+        phs[i].placeholder = t(pk)
+    }
+}
+
+function updateLangButtons(){
+    var btns = document.getElementsByClassName("lang-btn");
+    for(var i = 0; i < btns.length; i++){
+        if(btns[i].innerHTML === currentLang.toUpperCase()){
+            btns[i].className = "lang-btn active"
+        } else {
+            btns[i].className = "lang-btn"
+        }
+    }
+}
+
+/* Init lang */
+try{
+    var savedLang = localStorage.getItem("scannerLang");
+    if(savedLang) currentLang = savedLang
+}catch(e){}
+
+window.addEventListener("load", function(){
+    applyLang();
+    updateLangButtons()
+});
+
+/* ═══════════════════════════════════════
+   SCANNER LOGIC
+   ═══════════════════════════════════════ */
+var pollTimer = null;
+var scanStartTime = null;
+var logEntries = [];
+
+function $(id){ return document.getElementById(id) }
+function val(id){ return $(id) ? $(id).value : "" }
+
+function postJSON(url, data, cb){
+    var x = new XMLHttpRequest();
+    x.open("POST", url, true);
+    x.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
+    x.onreadystatechange = function(){
+        if(x.readyState === 4){
+            var r = null; try{ r = JSON.parse(x.responseText) }catch(e){}
+            if(cb) cb(x.status, r)
+        }
+    };
+    x.send(JSON.stringify(data))
+}
+
+function getJSON(url, cb){
+    var x = new XMLHttpRequest();
+    x.open("GET", url, true);
+    x.onreadystatechange = function(){
+        if(x.readyState === 4){
+            var r = null; try{ r = JSON.parse(x.responseText) }catch(e){}
+            if(cb) cb(x.status, r)
+        }
+    };
+    x.send()
+}
+
+function formatETA(sec){
+    if(!sec || sec <= 0) return "-";
+    var m = Math.floor(sec / 60), s = sec % 60;
+    if(m > 0) return m + t("st_speed").charAt(0) === "h" ? "m " : "\u043c " + s + "s";
+    return s + "s"
+}
+
+function saveSettings(){
+    try{
+        var data = {
+            server:val("cfgServer"),domain:val("cfgDomain"),netbios:val("cfgNetbios"),
+            user:val("cfgUser"),ouWork:val("cfgOuWork"),ouSrv:val("cfgOuSrv"),
+            threads:val("cfgThreads"),timeout:val("cfgTimeout"),
+            allowed:val("cfgAllowed"),expand:$("cfgExpand").checked
+        };
+        localStorage.setItem("scannerSettings",JSON.stringify(data));
+        alert(t("settings_saved"))
+    }catch(e){ alert("Error: "+e) }
+}
+
+function loadSettings(){
+    try{
+        var raw = localStorage.getItem("scannerSettings");
+        if(!raw){ alert(t("no_saved")); return }
+        applySettings(JSON.parse(raw))
+    }catch(e){}
+}
+
+function applySettings(d){
+    if(!d) return;
+    if(d.server) $("cfgServer").value=d.server;
+    if(d.domain) $("cfgDomain").value=d.domain;
+    if(d.netbios) $("cfgNetbios").value=d.netbios;
+    if(d.user) $("cfgUser").value=d.user;
+    if(d.ouWork) $("cfgOuWork").value=d.ouWork;
+    if(d.ouSrv) $("cfgOuSrv").value=d.ouSrv;
+    if(d.threads) $("cfgThreads").value=d.threads;
+    if(d.timeout) $("cfgTimeout").value=d.timeout;
+    if(d.allowed) $("cfgAllowed").value=d.allowed;
+    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=d.expand
+}
+
+try{
+    var sr = localStorage.getItem("scannerSettings");
+    if(sr) window.addEventListener("load",function(){ applySettings(JSON.parse(sr)) })
+}catch(e){}
+
+function doStart(){
+    var allowedRaw = val("cfgAllowed"), allowed = [];
+    if(allowedRaw){
+        var lines = allowedRaw.split("\n");
+        for(var i=0;i<lines.length;i++){
+            var line=lines[i].replace(/^\s+|\s+$/g,"");
+            if(line) allowed.push(line)
+        }
+    }
+    var config={scan:{
+        ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:val("cfgUser"),password:val("cfgPass")},
+        workstations_ou:val("cfgOuWork"),servers_ou:val("cfgOuSrv"),
+        max_threads:parseInt(val("cfgThreads"),10)||20,
+        host_timeout:parseInt(val("cfgTimeout"),10)||40,
+        allowed_admins:allowed,
+        expand_groups:$("cfgExpand").checked
+    }};
+    if(!config.scan.ad_config.server||!config.scan.ad_config.username||!config.scan.ad_config.password){
+        alert(t("fill_fields"));return
+    }
+    $("btnStart").disabled=true;$("btnStop").disabled=false;
+    $("logBox").innerHTML="";$("dlLinks").innerHTML="";
+    logEntries=[];scanStartTime=new Date();
+    postJSON("/scan/start",config,function(s,r){
+        if(s!==200){alert("Error: "+(r?r.error:""));$("btnStart").disabled=false;$("btnStop").disabled=true;return}
+        addLog(t("scan_started"),"log-info","",false,null);
+        pollTimer=setInterval(pollAll,1200)
+    })
+}
+
+function doStop(){
+    postJSON("/scan/stop",{},function(){
+        addLog(t("scan_stopping"),"log-info","",false,null)
+    })
+}
+
+function pollAll(){
+    getJSON("/scan/status",function(s,d){
+        if(!d)return;
+        var p=d.progress||0,tt=d.total||0,e=d.errors||0,f=d.found||0,ok=p-e;
+        if(ok<0)ok=0;
+        $("stProgress").innerHTML=p;$("stTotal").innerHTML=tt;
+        $("stSuccess").innerHTML=ok;$("stErrors").innerHTML=e;
+        $("stFound").innerHTML=f;$("stCurrent").innerHTML=d.current||"-";
+        var eta=d.eta_seconds||0;
+        if(eta>0){var em=Math.floor(eta/60),es=eta%60;$("stETA").innerHTML=em>0?em+"m"+es+"s":es+"s"}
+        else{$("stETA").innerHTML="-"}
+        if(scanStartTime&&p>0){var mins=(new Date()-scanStartTime)/60000;if(mins>0)$("stSpeed").innerHTML=Math.round(p/mins)}
+        var pct=tt>0?Math.round((p/tt)*100):0;
+        $("pBar").style.width=pct+"%";$("pText").innerHTML=pct+"% ("+p+"/"+tt+")"
+    });
+    getJSON("/scan/results",function(s,events){
+        if(!events||!events.length)return;
+        var i,ev,d;
+        for(i=0;i<events.length;i++){
+            ev=events[i];
+            if(ev.type==="machine"){
+                d=ev.data;
+                if(d.error){addLog("["+d.computer+"] ERROR: "+d.error,"log-err",d.computer,false,null)}
+                else{
+                    var names=[],allB=true,j;
+                    for(j=0;j<d.members.length;j++){
+                        var m=d.members[j],tag=m.name;
+                        if(m.via_group)tag+=" (\u0447\u0435\u0440\u0435\u0437 "+m.via_group+")";
+                        if(m.is_builtin){tag+=" [B]"}else{allB=false}
+                        names.push(tag)
+                    }
+                    var risk=d.risk||{},sev=risk.severity||"clean";
+                    var cls="log-ok";
+                    if(allB)cls="log-builtin";
+                    if(sev==="high"||sev==="critical")cls="log-risk-high";
+                    else if(sev==="medium")cls="log-risk-medium";
+                    var prefix="["+d.computer+"] ("+d.method+" "+d.scan_time_sec+"s";
+                    if(sev!=="clean")prefix+=" RISK:"+sev+"="+risk.score;
+                    prefix+="): ";
+                    addLog(prefix+names.join(", "),cls,d.computer,allB,sev)
+                }
+            }else if(ev.type==="completed"){
+                addLog(t("scan_completed"),"log-done","",false,null);
+                $("btnStart").disabled=false;$("btnStop").disabled=true;
+                $("cfgPass").value="";
+                if(pollTimer){clearInterval(pollTimer);pollTimer=null}
+                var h="";
+                if(ev.json)h+='<a href="/download/'+ev.json+'">JSON</a>';
+                if(ev.csv)h+='<a href="/download/'+ev.csv+'">CSV</a>';
+                if(ev.summary)h+='<a href="/download/'+ev.summary+'" class="dl-summary">Summary</a>';
+                h+='<a href="/summary" class="dl-view" target="_blank">'+t("view_summary")+'</a>';
+                $("dlLinks").innerHTML=h
+            }else if(ev.type==="error"){
+                addLog("ERROR: "+(ev.message||""),"log-err","",false,null);
+                $("btnStart").disabled=false;$("btnStop").disabled=true;
+                if(pollTimer){clearInterval(pollTimer);pollTimer=null}
+            }
+        }
+    })
+}
+
+function addLog(text,cls,computer,isBuiltinOnly,severity){
+    logEntries.push({text:text,cls:cls,computer:computer||"",isBuiltinOnly:!!isBuiltinOnly,isErr:cls==="log-err",isOk:cls==="log-ok"||cls==="log-builtin",severity:severity});
+    if(shouldShow(logEntries[logEntries.length-1]))renderOne(text,cls)
+}
+function shouldShow(e){
+    var ft=val("logFilter").toLowerCase();
+    if(ft&&e.text.toLowerCase().indexOf(ft)===-1)return false;
+    if($("hideBuiltin").checked&&e.isBuiltinOnly)return false;
+    if($("hideOk").checked&&e.isOk)return false;
+    if($("hideErr").checked&&e.isErr)return false;
+    return true
+}
+function renderOne(text,cls){
+    var box=$("logBox"),div=document.createElement("div");
+    if(cls)div.className=cls;div.appendChild(document.createTextNode(text));
+    box.appendChild(div);box.scrollTop=box.scrollHeight
+}
+function filterLog(){
+    var box=$("logBox");box.innerHTML="";
+    for(var i=0;i<logEntries.length;i++){if(shouldShow(logEntries[i]))renderOne(logEntries[i].text,logEntries[i].cls)}
+}
+</script>
+</body>
+</html>

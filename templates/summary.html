@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Scan Summary</title>
+    <style>
+        *{box-sizing:border-box}
+        body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:15px;background:#f0f2f5;color:#333}
+        .container{max-width:1500px;margin:0 auto}
+        h1{color:#1a1a2e;font-size:22px;margin:0 0 5px}
+        .subtitle{color:#888;font-size:13px;margin-bottom:12px}
+        a.back{color:#4a90d9;text-decoration:none;font-size:14px}
+        a.back:hover{text-decoration:underline}
+        .lang-switch{float:right;margin-bottom:8px}
+        .lang-btn{padding:4px 12px;font-size:12px;font-weight:bold;border:1px solid #ccc;border-radius:3px;cursor:pointer;margin-left:4px;background:#fff}
+        .lang-btn.active{background:#4a90d9;color:#fff;border-color:#4a90d9}
+        .toolbar{margin-bottom:12px;overflow:hidden}
+        .toolbar button,.toolbar select{padding:6px 14px;font-size:13px;font-weight:bold;border:1px solid #ccc;border-radius:3px;cursor:pointer;margin-right:6px;background:#fff;vertical-align:middle}
+        .toolbar button{background:#4a90d9;color:#fff;border:none}
+        .toolbar button:hover{background:#3a7bc8}
+        .toolbar button.print-btn{background:#9b59b6}
+        .toolbar button.diff-btn{background:#e67e22}
+        .toolbar button.rebuild-btn{background:#1abc9c}
+        .tabs{overflow:hidden;border-bottom:2px solid #4a90d9;margin-bottom:12px}
+        .tab{float:left;padding:7px 18px;cursor:pointer;font-size:13px;font-weight:bold;color:#666;background:#e8e8e8;border:1px solid #ccc;border-bottom:none;border-radius:4px 4px 0 0;margin-right:2px}
+        .tab:hover{background:#d0d0d0}
+        .tab.active{background:#fff;color:#4a90d9;border-color:#4a90d9;border-bottom:2px solid #fff;margin-bottom:-2px}
+        .tab-content{display:none}
+        .tab-content.active{display:block}
+        .cards{overflow:hidden;margin-bottom:12px}
+        .card-sm{float:left;width:11.1%;padding:3px}
+        .card-inner{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:10px;text-align:center}
+        .card-val{font-size:22px;font-weight:bold}
+        .card-label{font-size:9px;color:#888;text-transform:uppercase;margin-top:2px}
+        .c-blue{color:#4a90d9}.c-green{color:#5cb85c}.c-red{color:#d9534f}.c-orange{color:#f0ad4e}.c-purple{color:#9b59b6}.c-teal{color:#1abc9c}.c-gray{color:#95a5a6}.c-dark{color:#34495e}.c-pink{color:#e74c3c}
+        .charts{overflow:hidden;margin-bottom:12px}
+        .chart-box{float:left;width:20%;padding:3px}
+        .chart-inner{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:12px;min-height:280px}
+        .chart-inner h3{margin:0 0 8px;font-size:12px;color:#1a1a2e}
+        canvas{display:block;margin:0 auto}
+        .legend{margin-top:6px;font-size:10px}
+        .legend-item{margin-bottom:2px}
+        .legend-color{display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:middle;border-radius:2px}
+        .tbl-wrap{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:12px;margin-bottom:12px}
+        .tbl-wrap h3{margin:0 0 8px;font-size:14px}
+        .search-box{margin-bottom:6px}
+        .search-box input{padding:4px 8px;width:250px;font-size:12px;border:1px solid #ccc;border-radius:3px}
+        .filter-options{margin-bottom:8px;font-size:12px}
+        .filter-options label{display:inline;margin-right:12px;cursor:pointer}
+        table{width:100%;border-collapse:collapse;font-size:11px}
+        th{background:#4a90d9;color:#fff;padding:6px;text-align:left;cursor:pointer;white-space:nowrap}
+        th:hover{background:#3a7bc8}
+        td{padding:4px 6px;border-bottom:1px solid #eee}
+        tr:hover td{background:#f5f8fc}
+        .tag{display:inline-block;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:bold}
+        .tag-risk{background:#fde8e8;color:#d9534f}
+        .tag-builtin{background:#e3f2fd;color:#1976d2}
+        .tag-local-admin{background:#fff3e0;color:#e65100}
+        .tag-nested{background:#f3e5f5;color:#7b1fa2}
+        .tag-critical{background:#c0392b;color:#fff}
+        .tag-high{background:#e74c3c;color:#fff}
+        .tag-medium{background:#f39c12;color:#fff}
+        .tag-low{background:#f1c40f;color:#333}
+        .machines-cell{font-size:9px;color:#666;max-width:300px;max-height:50px;overflow-y:auto;word-break:break-all}
+        .via-cell{font-size:9px;color:#9b59b6;max-width:150px;word-break:break-all}
+        .risky-grid{overflow:hidden}
+        .risky-item{float:left;width:25%;padding:3px}
+        .risky-card{background:#fff3e0;border:1px solid #ffcc02;border-radius:4px;padding:8px;font-size:11px}
+        .risky-card strong{color:#e65100}
+        .risky-members{color:#666;margin-top:2px;font-size:10px}
+        .risky-score{float:right;font-weight:bold;font-size:12px}
+        .sev-critical{color:#c0392b}.sev-high{color:#e74c3c}.sev-medium{color:#f39c12}.sev-low{color:#f1c40f}
+        .clean-list{column-count:5;font-size:11px;color:#388e3c}
+        .clean-list div{padding:1px 0}
+        .heatmap-wrap{overflow-x:auto}
+        .heatmap-table{border-collapse:collapse;font-size:9px}
+        .heatmap-table th{padding:3px 5px;background:#4a90d9;color:#fff;font-size:9px;white-space:nowrap}
+        .heatmap-table td{padding:3px 5px;text-align:center;border:1px solid #eee}
+        .hm-yes{background:#e74c3c;color:#fff}
+        .hm-no{background:#f0f0f0}
+        .diff-box{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:12px;margin-bottom:12px}
+        .diff-added{color:#5cb85c}
+        .diff-removed{color:#d9534f}
+        .diff-stats{overflow:hidden;margin-bottom:8px}
+        .diff-stat{float:left;width:25%;text-align:center;padding:8px}
+        .no-data{text-align:center;padding:40px;color:#999;font-size:16px}
+        @media print{.toolbar,.tabs,.search-box,.back,.filter-options,.lang-switch{display:none!important}.tab-content{display:block!important}body{background:#fff;padding:5px}}
+    </style>
+</head>
+<body>
+<div class="container">
+    <div style="overflow:hidden">
+        <a href="/" class="back" data-i18n="s_back">&larr; Back to Scanner</a>
+        <span class="lang-switch">
+            <button class="lang-btn" onclick="setLang('en')">EN</button>
+            <button class="lang-btn" onclick="setLang('ru')">RU</button>
+        </span>
+    </div>
+    <h1 data-i18n="s_title">Scan Summary &amp; Analytics</h1>
+    <div class="subtitle" id="scanTime"></div>
+
+    <div class="toolbar">
+        <button class="print-btn" onclick="window.print()" data-i18n="s_print">Print</button>
+        <select id="selScan" onchange="loadSelectedScan()"><option value="" data-i18n="s_load_prev">-- Load previous --</option></select>
+        <button class="rebuild-btn" onclick="rebuildCurrent()" data-i18n="s_rebuild">Rebuild All</button>
+        <select id="selDiff1"><option value="" data-i18n="s_scan1">Scan 1</option></select>
+        <select id="selDiff2"><option value="" data-i18n="s_scan2">Scan 2</option></select>
+        <button class="diff-btn" onclick="runDiff()" data-i18n="s_compare">Compare</button>
+    </div>
+
+    <div id="loading" class="no-data" data-i18n="s_loading">Loading...</div>
+
+    <div id="content" style="display:none">
+        <div class="cards" id="summaryCards"></div>
+        <div class="tabs" id="tabBar"></div>
+
+        <div class="tab-content active" id="tabCharts">
+            <div class="charts">
+                <div class="chart-box"><div class="chart-inner"><h3 data-i18n="ch_results">Results</h3><canvas id="cResults" width="160" height="160"></canvas><div class="legend" id="lResults"></div></div></div>
+                <div class="chart-box"><div class="chart-inner"><h3 data-i18n="ch_methods">Methods</h3><canvas id="cMethods" width="160" height="160"></canvas><div class="legend" id="lMethods"></div></div></div>
+                <div class="chart-box"><div class="chart-inner"><h3 data-i18n="ch_errors">Errors</h3><canvas id="cErrors" width="160" height="160"></canvas><div class="legend" id="lErrors"></div></div></div>
+                <div class="chart-box"><div class="chart-inner"><h3 data-i18n="ch_os">OS</h3><canvas id="cOS" width="160" height="160"></canvas><div class="legend" id="lOS"></div></div></div>
+                <div class="chart-box"><div class="chart-inner"><h3 data-i18n="ch_ports">Ports</h3><canvas id="cPorts" width="160" height="160"></canvas><div class="legend" id="lPorts"></div></div></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tabAdmins">
+            <div class="tbl-wrap">
+                <h3><span data-i18n="adm_title">All Admin Accounts</span> &mdash; <span data-i18n="adm_showing">Showing</span> <span id="adminShowing">0</span> <span data-i18n="adm_of">of</span> <span id="adminTotal">0</span></h3>
+                <div class="search-box"><input type="text" id="adminSearch" data-i18n-placeholder="adm_search" placeholder="Search..." onkeyup="filterAdmins()"></div>
+                <div class="filter-options">
+                    <label><input type="checkbox" id="hideLocalAdmin" onchange="filterAdmins()"> <span data-i18n="adm_hide_admin">Hide Administrator</span></label>
+                    <label><input type="checkbox" id="hideAllBuiltin" onchange="filterAdmins()"> <span data-i18n="adm_hide_builtin">Hide ALL built-in</span></label>
+                    <label><input type="checkbox" id="showOnlyCustom" onchange="filterAdmins()"> <span data-i18n="adm_only_custom">Only custom</span></label>
+                    <label><input type="checkbox" id="showOnlyViaGroup" onchange="filterAdmins()"> <span data-i18n="adm_only_via">Only via group</span></label>
+                    <label><input type="checkbox" id="hideGroupHeaders" onchange="filterAdmins()"> <span data-i18n="adm_hide_groups">Hide groups</span></label>
+                </div>
+                <table id="adminTable">
+                    <thead><tr>
+                        <th onclick="sortTbl('adminTable',0)">#</th>
+                        <th onclick="sortTbl('adminTable',1)" data-i18n="col_account">Account</th>
+                        <th onclick="sortTbl('adminTable',2)" data-i18n="col_type">Type</th>
+                        <th onclick="sortTbl('adminTable',3)" data-i18n="col_count">Count</th>
+                        <th onclick="sortTbl('adminTable',4)" data-i18n="col_via">Via Group</th>
+                        <th data-i18n="col_machines">Machines</th>
+                    </tr></thead>
+                    <tbody id="adminBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tabRisky">
+            <div class="tbl-wrap">
+                <h3><span data-i18n="risk_title">Risky Machines</span> (<span id="riskyCount">0</span>)</h3>
+                <div class="search-box"><input type="text" id="riskySearch" placeholder="Search..." onkeyup="filterGrid('riskyGrid','riskySearch')"></div>
+                <div class="risky-grid" id="riskyGrid"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tabClean">
+            <div class="tbl-wrap">
+                <h3><span data-i18n="clean_title">Clean Machines</span> (<span id="cleanCount">0</span>)</h3>
+                <div class="clean-list" id="cleanList"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tabHeatmap">
+            <div class="tbl-wrap">
+                <h3 data-i18n="heat_title">Admin Heatmap</h3>
+                <div class="heatmap-wrap" id="heatmapWrap"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tabDiff">
+            <div class="diff-box" id="diffResults"><p style="color:#999" data-i18n="diff_hint">Select two scans and click Compare.</p></div>
+        </div>
+
+        <div class="tab-content" id="tabHistory">
+            <div class="tbl-wrap">
+                <h3 data-i18n="hist_title">Scan History</h3>
+                <table>
+                    <thead><tr>
+                        <th data-i18n="col_file">File</th>
+                        <th data-i18n="col_type">Type</th>
+                        <th data-i18n="col_size">Size</th>
+                        <th data-i18n="col_date">Date</th>
+                        <th data-i18n="col_action">Action</th>
+                    </tr></thead>
+                    <tbody id="historyBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════
+   LANGUAGE
+   ═══════════════════════════════════════ */
+var LANG={
+en:{
+    s_back:"\u2190 Back to Scanner",s_title:"Scan Summary & Analytics",s_print:"Print",s_rebuild:"Rebuild All",
+    s_compare:"Compare",s_loading:"Loading...",s_load_prev:"-- Load previous --",s_scan1:"Scan 1",s_scan2:"Scan 2",
+    ch_results:"Results",ch_methods:"Methods",ch_errors:"Errors",ch_os:"OS",ch_ports:"Ports",
+    adm_title:"All Admin Accounts",adm_showing:"Showing",adm_of:"of",adm_search:"Search accounts...",
+    adm_hide_admin:"Hide Administrator",adm_hide_builtin:"Hide ALL built-in",adm_only_custom:"Only custom",
+    adm_only_via:"Only via group",adm_hide_groups:"Hide groups",
+    col_account:"Account",col_type:"Type",col_count:"Count",col_via:"Via Group",col_machines:"Machines",
+    col_file:"File",col_size:"Size",col_date:"Date",col_action:"Action",
+    risk_title:"Risky Machines",clean_title:"Clean Machines",heat_title:"Admin Heatmap",
+    hist_title:"Scan History",diff_hint:"Select two scans and click Compare.",
+    tab_charts:"Charts",tab_admins:"Admins",tab_risky:"Risky",tab_clean:"Clean",
+    tab_heatmap:"Heatmap",tab_diff:"Diff",tab_history:"History",
+    card_total:"Total",card_success:"Success",card_errors:"Errors",card_accounts:"Accounts",
+    card_risky:"Risky",card_clean:"Clean",card_avg:"Avg",card_max:"Max",card_critical:"Critical",
+    all_clean:"All clean!",no_data:"No data",diff_no_changes:"No changes!",
+    diff_added:"Added",diff_removed:"Removed",diff_new:"New",
+    dl_download:"Download",dl_load:"Load",rebuilt_msg:"Rebuilt! Accounts: "
+},
+ru:{
+    s_back:"\u2190 \u041d\u0430\u0437\u0430\u0434 \u043a \u0441\u043a\u0430\u043d\u0435\u0440\u0443",
+    s_title:"\u0421\u0432\u043e\u0434\u043a\u0430 \u0438 \u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a\u0430",
+    s_print:"\u041f\u0435\u0447\u0430\u0442\u044c",s_rebuild:"\u041f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u0442\u044c",
+    s_compare:"\u0421\u0440\u0430\u0432\u043d\u0438\u0442\u044c",s_loading:"\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...",
+    s_load_prev:"-- \u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c --",s_scan1:"\u0421\u043a\u0430\u043d 1",s_scan2:"\u0421\u043a\u0430\u043d 2",
+    ch_results:"\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u044b",ch_methods:"\u041c\u0435\u0442\u043e\u0434\u044b",
+    ch_errors:"\u041e\u0448\u0438\u0431\u043a\u0438",ch_os:"\u041e\u0421",ch_ports:"\u041f\u043e\u0440\u0442\u044b",
+    adm_title:"\u0412\u0441\u0435 \u0443\u0447\u0451\u0442\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+    adm_showing:"\u041f\u043e\u043a\u0430\u0437\u0430\u043d\u043e",adm_of:"\u0438\u0437",
+    adm_search:"\u041f\u043e\u0438\u0441\u043a...",
+    adm_hide_admin:"\u0421\u043a\u0440\u044b\u0442\u044c \u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440",
+    adm_hide_builtin:"\u0421\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0435 \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u044b\u0435",
+    adm_only_custom:"\u0422\u043e\u043b\u044c\u043a\u043e \u043d\u0435\u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u044b\u0435",
+    adm_only_via:"\u0422\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043f\u043f\u0443",
+    adm_hide_groups:"\u0421\u043a\u0440\u044b\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u044b",
+    col_account:"\u0423\u0447\u0451\u0442\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c",
+    col_type:"\u0422\u0438\u043f",col_count:"\u041a\u043e\u043b-\u0432\u043e",
+    col_via:"\u0427\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043f\u043f\u0443",
+    col_machines:"\u041c\u0430\u0448\u0438\u043d\u044b",
+    col_file:"\u0424\u0430\u0439\u043b",col_size:"\u0420\u0430\u0437\u043c\u0435\u0440",
+    col_date:"\u0414\u0430\u0442\u0430",col_action:"\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u0435",
+    risk_title:"\u041c\u0430\u0448\u0438\u043d\u044b \u0441 \u0440\u0438\u0441\u043a\u043e\u043c",
+    clean_title:"\u0427\u0438\u0441\u0442\u044b\u0435 \u043c\u0430\u0448\u0438\u043d\u044b",
+    heat_title:"\u0422\u0435\u043f\u043b\u043e\u0432\u0430\u044f \u043a\u0430\u0440\u0442\u0430",
+    hist_title:"\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u0441\u043a\u0430\u043d\u043e\u0432",
+    diff_hint:"\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0432\u0430 \u0441\u043a\u0430\u043d\u0430 \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u0421\u0440\u0430\u0432\u043d\u0438\u0442\u044c.",
+    tab_charts:"\u0413\u0440\u0430\u0444\u0438\u043a\u0438",tab_admins:"\u0410\u0434\u043c\u0438\u043d\u044b",
+    tab_risky:"\u0420\u0438\u0441\u043a",tab_clean:"\u0427\u0438\u0441\u0442\u044b\u0435",
+    tab_heatmap:"\u041a\u0430\u0440\u0442\u0430",tab_diff:"\u0421\u0440\u0430\u0432\u043d\u0435\u043d\u0438\u0435",
+    tab_history:"\u0418\u0441\u0442\u043e\u0440\u0438\u044f",
+    card_total:"\u0412\u0441\u0435\u0433\u043e",card_success:"\u0423\u0441\u043f\u0435\u0445",
+    card_errors:"\u041e\u0448\u0438\u0431\u043a\u0438",card_accounts:"\u0423\u0447\u0451\u0442\u043a\u0438",
+    card_risky:"\u0420\u0438\u0441\u043a",card_clean:"\u0427\u0438\u0441\u0442\u044b\u0435",
+    card_avg:"\u0421\u0440\u0435\u0434\u043d.",card_max:"\u041c\u0430\u043a\u0441.",card_critical:"\u041a\u0440\u0438\u0442.",
+    all_clean:"\u0412\u0441\u0435 \u0447\u0438\u0441\u0442\u043e!",no_data:"\u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445",
+    diff_no_changes:"\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439 \u043d\u0435\u0442!",
+    diff_added:"\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e",diff_removed:"\u0423\u0434\u0430\u043b\u0435\u043d\u043e",
+    diff_new:"\u041d\u043e\u0432\u044b\u0435",
+    dl_download:"\u0421\u043a\u0430\u0447\u0430\u0442\u044c",dl_load:"\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c",
+    rebuilt_msg:"\u041f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u043d\u043e! \u0423\u0447\u0451\u0442\u043e\u043a: "
+}};
+
+var currentLang="en";
+function t(k){var d=LANG[currentLang]||LANG.en;return d[k]||(LANG.en[k]||k)}
+function setLang(l){currentLang=l;try{localStorage.setItem("scannerLang",l)}catch(e){}applyLang();updateLangBtns();if(SD)renderAll()}
+function applyLang(){
+    var els=document.querySelectorAll("[data-i18n]");
+    for(var i=0;i<els.length;i++){var k=els[i].getAttribute("data-i18n");els[i].innerHTML=t(k)}
+    var phs=document.querySelectorAll("[data-i18n-placeholder]");
+    for(i=0;i<phs.length;i++){var pk=phs[i].getAttribute("data-i18n-placeholder");phs[i].placeholder=t(pk)}
+}
+function updateLangBtns(){var bs=document.getElementsByClassName("lang-btn");for(var i=0;i<bs.length;i++){bs[i].className=bs[i].innerHTML===currentLang.toUpperCase()?"lang-btn active":"lang-btn"}}
+try{var sl=localStorage.getItem("scannerLang");if(sl)currentLang=sl}catch(e){}
+window.addEventListener("load",function(){applyLang();updateLangBtns()});
+
+/* ═══════════════════════════════════════ */
+var SD=null,COLORS=["#4a90d9","#5cb85c","#d9534f","#f0ad4e","#9b59b6","#1abc9c","#e74c3c","#3498db","#2ecc71","#e67e22","#95a5a6","#34495e","#16a085","#c0392b","#8e44ad","#2c3e50"];
+var sortDirs={};
+function $(id){return document.getElementById(id)}
+function val(id){return $(id)?$(id).value:""}
+function getJSON(u,cb){var x=new XMLHttpRequest();x.open("GET",u,true);x.onreadystatechange=function(){if(x.readyState===4){var r=null;try{r=JSON.parse(x.responseText)}catch(e){}cb(x.status,r)}};x.send()}
+function formatSize(b){if(b>1048576)return(b/1048576).toFixed(1)+"MB";if(b>1024)return(b/1024).toFixed(1)+"KB";return b+"B"}
+function isLA(s){return s==="administrator"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440"}
+
+getJSON("/api/scans",function(s,data){
+    if(!data)return;var sel=$("selScan"),s1=$("selDiff1"),s2=$("selDiff2"),hist=$("historyBody"),hh="";
+    for(var i=0;i<data.length;i++){var f=data[i];
+        if(f.type==="summary"){var o=document.createElement("option");o.value=f.filename;o.text=f.filename+" ("+f.modified+")";sel.appendChild(o);
+            var o1=document.createElement("option");o1.value=f.filename;o1.text=f.filename;s1.appendChild(o1);
+            var o2=document.createElement("option");o2.value=f.filename;o2.text=f.filename;s2.appendChild(o2)}
+        hh+="<tr><td>"+f.filename+"</td><td>"+f.type+"</td><td>"+formatSize(f.size)+"</td><td>"+f.modified+"</td><td>"
+            +"<a href=\"/download/"+f.filename+"\" style=\"color:#4a90d9\">"+t("dl_download")+"</a>";
+        if(f.type==="summary")hh+=" | <a href=\"#\" onclick=\"loadScan('"+f.filename+"');return false\" style=\"color:#5cb85c\">"+t("dl_load")+"</a>";
+        hh+="</td></tr>"}
+    hist.innerHTML=hh
+});
+function loadSelectedScan(){var v=val("selScan");if(v)loadScan(v)}
+function loadScan(fn){getJSON("/api/summary/load/"+fn,function(s,d){if(s!==200||!d){alert("Failed");return}SD=d;$("loading").style.display="none";$("content").style.display="block";if(d.scan_timestamp)$("scanTime").innerHTML=d.scan_timestamp;renderAll()})}
+function rebuildCurrent(){getJSON("/api/scans",function(s,d){if(!d)return;var cf="";for(var i=0;i<d.length;i++){if(d[i].type==="summary"){cf=d[i].filename;break}}if(!cf)return;getJSON("/api/summary/rebuild/"+cf,function(st,r){if(st!==200||!r){alert("Failed");return}SD=r;renderAll();alert(t("rebuilt_msg")+(r.top_admins||[]).length)})})}
+getJSON("/api/summary",function(s,d){if(s!==200||!d||d.error){$("loading").innerHTML=t("no_data");return}SD=d;$("loading").style.display="none";$("content").style.display="block";if(d.scan_timestamp)$("scanTime").innerHTML=d.scan_timestamp;renderAll()});
+
+function buildTabs(){
+    var tabs=[{id:"tabCharts",l:"tab_charts"},{id:"tabAdmins",l:"tab_admins"},{id:"tabRisky",l:"tab_risky"},{id:"tabClean",l:"tab_clean"},{id:"tabHeatmap",l:"tab_heatmap"},{id:"tabDiff",l:"tab_diff"},{id:"tabHistory",l:"tab_history"}];
+    var h="";for(var i=0;i<tabs.length;i++){h+="<div class=\""+(i===0?"tab active":"tab")+"\" onclick=\"switchTab('"+tabs[i].id+"',this)\">"+t(tabs[i].l)+"</div>"}
+    $("tabBar").innerHTML=h
+}
+function switchTab(id,el){var cs=document.getElementsByClassName("tab-content");for(var i=0;i<cs.length;i++)cs[i].className="tab-content";$(id).className="tab-content active";var ts=document.getElementsByClassName("tab");for(i=0;i<ts.length;i++)ts[i].className="tab";el.className="tab active"}
+
+function renderAll(){if(!SD)return;buildTabs();applyLang();renderCards();
+    drawPie("cResults","lResults",{"Success":SD.success||0,"Errors":SD.errors||0},["#5cb85c","#d9534f"]);
+    drawPie("cMethods","lMethods",SD.method_breakdown||{},COLORS);drawPie("cErrors","lErrors",SD.error_breakdown||{},COLORS.slice(2));
+    drawPie("cOS","lOS",SD.os_breakdown||{},COLORS.slice(4));drawPie("cPorts","lPorts",SD.port_statistics||{},COLORS);
+    renderAdmins();renderRisky();renderClean();renderHeatmap()}
+
+function renderCards(){var d=SD,sb=d.severity_breakdown||{};
+    var items=[{v:d.total_scanned||0,l:"card_total",c:"c-blue"},{v:d.success||0,l:"card_success",c:"c-green"},{v:d.errors||0,l:"card_errors",c:"c-red"},
+        {v:d.unique_admin_accounts||0,l:"card_accounts",c:"c-purple"},{v:d.risky_machines_count||0,l:"card_risky",c:"c-orange"},
+        {v:d.clean_machines_count||0,l:"card_clean",c:"c-teal"},{v:(d.avg_scan_time_sec||0)+"s",l:"card_avg",c:"c-gray"},
+        {v:(d.max_scan_time_sec||0)+"s",l:"card_max",c:"c-dark"},{v:sb.critical||0,l:"card_critical",c:"c-pink"}];
+    var h="";for(var i=0;i<items.length;i++){h+="<div class=\"card-sm\"><div class=\"card-inner\"><div class=\"card-val "+items[i].c+"\">"+items[i].v+"</div><div class=\"card-label\">"+t(items[i].l)+"</div></div></div>"}
+    $("summaryCards").innerHTML=h}
+
+function drawPie(cid,lid,obj,colors){var cv=$(cid);if(!cv||!cv.getContext)return;var ctx=cv.getContext("2d"),w=cv.width,h=cv.height,cx=w/2,cy=h/2,r=Math.min(w,h)/2-6;ctx.clearRect(0,0,w,h);
+    var keys=[],vals=[],total=0,k;for(k in obj){if(obj.hasOwnProperty(k)){keys.push(k);vals.push(obj[k]);total+=obj[k]}}
+    if(total===0){ctx.font="12px Segoe UI";ctx.fillStyle="#999";ctx.textAlign="center";ctx.fillText(t("no_data"),cx,cy);$(lid).innerHTML="";return}
+    var start=-Math.PI/2,i;for(i=0;i<keys.length;i++){var sl=(vals[i]/total)*2*Math.PI;ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,r,start,start+sl);ctx.closePath();ctx.fillStyle=colors[i%colors.length];ctx.fill();
+        if(vals[i]/total>0.05){var mid=start+sl/2,lx=cx+(r*0.6)*Math.cos(mid),ly=cy+(r*0.6)*Math.sin(mid);ctx.font="bold 9px Segoe UI";ctx.fillStyle="#fff";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(Math.round(vals[i]/total*100)+"%",lx,ly)}start+=sl}
+    var lh="",pct;for(i=0;i<keys.length;i++){pct=Math.round(vals[i]/total*100);lh+="<div class=\"legend-item\"><span class=\"legend-color\" style=\"background:"+colors[i%colors.length]+"\"></span>"+keys[i]+": <b>"+vals[i]+"</b> ("+pct+"%)</div>"}$(lid).innerHTML=lh}
+
+function renderAdmins(){var admins=SD.top_admins||[],html="";
+    for(var i=0;i<admins.length;i++){var a=admins[i],lower=(a.account||"").toLowerCase(),short=lower.indexOf("\\")>-1?lower.split("\\")[1]:lower;
+        var isBI=a.is_builtin===true,isLAd=a.hasOwnProperty("is_local_admin")?a.is_local_admin===true:isLA(short);
+        var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=aType.indexOf("Group")>-1||aType.indexOf("nested")>-1;
+        var tagT,tagC;if(isLAd){tagT="local-admin";tagC="tag-local-admin"}else if(isGrp){tagT="group";tagC="tag-nested"}else if(isBI){tagT="builtin";tagC="tag-builtin"}else{tagT="custom";tagC="tag-risk"}
+        var tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",mList=(a.machines||[]).join(", ");
+        html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\">"
+            +"<td>"+(i+1)+"</td><td>"+a.account+" "+tag+"</td><td>"+tag+"</td>"
+            +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
+            +"<td class=\"via-cell\">"+via+"</td><td><div class=\"machines-cell\">"+mList+"</div></td></tr>"}
+    $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;filterAdmins()}
+
+function filterAdmins(){var st=val("adminSearch").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false;
+    var rows=$("adminBody").getElementsByTagName("tr"),vis=0;
+    for(var i=0;i<rows.length;i++){var row=rows[i],sd=row.getAttribute("data-search")||"",ila=row.getAttribute("data-is-la")==="1",ibi=row.getAttribute("data-is-bi")==="1",icu=row.getAttribute("data-is-custom")==="1",hv=row.getAttribute("data-has-via")==="1",ig=row.getAttribute("data-is-group")==="1";
+        var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;
+        row.style.display=show?"":"none";if(show)vis++}$("adminShowing").innerHTML=vis}
+
+function renderRisky(){var machines=SD.risky_machines||[],details=SD.risky_details||{},risks=SD.machine_risks||{};$("riskyCount").innerHTML=machines.length;
+    if(!machines.length){$("riskyGrid").innerHTML="<div style=\"padding:20px;color:#5cb85c;font-weight:bold\">"+t("all_clean")+"</div>";return}
+    var h="";for(var i=0;i<machines.length;i++){var m=machines[i],mb=details[m]||[],rk=risks[m]||{},sev=rk.severity||"unknown",sc=rk.score||0;
+        h+="<div class=\"risky-item\" data-search=\""+m.toLowerCase()+"\"><div class=\"risky-card\"><span class=\"risky-score sev-"+sev+"\">"+sc+"</span><strong>"+m+"</strong> <span class=\"tag tag-"+sev+"\">"+sev+"</span><div class=\"risky-members\">"+mb.join(", ")+"</div></div></div>"}
+    $("riskyGrid").innerHTML=h}
+
+function renderClean(){var m=SD.clean_machines||[];$("cleanCount").innerHTML=m.length;var h="";for(var i=0;i<m.length;i++)h+="<div>"+m[i]+"</div>";$("cleanList").innerHTML=h}
+
+function renderHeatmap(){var admins=SD.top_admins||[];if(!admins.length){$("heatmapWrap").innerHTML=t("no_data");return}
+    var filtered=[],fi;for(fi=0;fi<admins.length&&filtered.length<20;fi++){var aa=admins[fi],al=(aa.account||"").toLowerCase(),as=al.indexOf("\\")>-1?al.split("\\")[1]:al;if(!aa.is_builtin&&!isLA(as)&&!(aa.type||"").match(/group/i))filtered.push(aa)}
+    if(!filtered.length)filtered=admins.slice(0,20);
+    var allM={},i,j,k;for(i=0;i<filtered.length;i++){var ms=filtered[i].machines||[];for(j=0;j<ms.length;j++)allM[ms[j]]=true}
+    var mList=[];for(k in allM)if(allM.hasOwnProperty(k))mList.push(k);mList.sort();if(mList.length>50)mList=mList.slice(0,50);
+    var h="<table class=\"heatmap-table\"><thead><tr><th>"+t("col_account")+"</th>";for(i=0;i<mList.length;i++)h+="<th title=\""+mList[i]+"\">"+mList[i].split(".")[0]+"</th>";h+="</tr></thead><tbody>";
+    for(i=0;i<filtered.length;i++){var a=filtered[i],mSet={},ams=a.machines||[];for(j=0;j<ams.length;j++)mSet[ams[j]]=true;h+="<tr><td style=\"white-space:nowrap;font-weight:bold\">"+a.account+"</td>";
+        for(j=0;j<mList.length;j++)h+=mSet[mList[j]]?"<td class=\"hm-yes\">&#10003;</td>":"<td class=\"hm-no\"></td>";h+="</tr>"}
+    h+="</tbody></table>";$("heatmapWrap").innerHTML=h}
+
+function runDiff(){var s1v=val("selDiff1"),s2v=val("selDiff2");if(!s1v||!s2v){alert("Select two scans");return}if(s1v===s2v){alert("Different scans");return}
+    getJSON("/api/diff?scan1="+encodeURIComponent(s1v)+"&scan2="+encodeURIComponent(s2v),function(st,data){if(st!==200||!data){alert("Failed");return}
+        var tabs=document.getElementsByClassName("tab");for(var tt=0;tt<tabs.length;tt++){if(tabs[tt].innerHTML===t("tab_diff")){switchTab("tabDiff",tabs[tt]);break}}
+        var h="<h3>"+t("s_compare")+"</h3><div class=\"diff-stats\">"
+            +"<div class=\"diff-stat\"><b>"+data.scan1_date+"</b><br>"+data.scan1_total+" hosts, "+data.scan1_risky+" risky</div>"
+            +"<div class=\"diff-stat\"><b>"+data.scan2_date+"</b><br>"+data.scan2_total+" hosts, "+data.scan2_risky+" risky</div>"
+            +"<div class=\"diff-stat diff-added\"><b>+"+data.added_count+"</b><br>"+t("diff_new")+"</div>"
+            +"<div class=\"diff-stat diff-removed\"><b>-"+data.removed_count+"</b><br>"+t("diff_removed")+"</div></div>";
+        if(data.added_count>0){h+="<h4 class=\"diff-added\">"+t("diff_added")+":</h4><table><thead><tr><th>Machine</th><th>Account</th></tr></thead><tbody>";for(var i=0;i<data.added.length&&i<500;i++)h+="<tr><td>"+data.added[i].machine+"</td><td>"+data.added[i].account+"</td></tr>";h+="</tbody></table>"}
+        if(data.removed_count>0){h+="<h4 class=\"diff-removed\">"+t("diff_removed")+":</h4><table><thead><tr><th>Machine</th><th>Account</th></tr></thead><tbody>";for(i=0;i<data.removed.length&&i<500;i++)h+="<tr><td>"+data.removed[i].machine+"</td><td>"+data.removed[i].account+"</td></tr>";h+="</tbody></table>"}
+        if(data.added_count===0&&data.removed_count===0)h+="<p style=\"color:#5cb85c;font-weight:bold\">"+t("diff_no_changes")+"</p>";
+        $("diffResults").innerHTML=h})}
+
+function filterGrid(gid,iid){var f=val(iid).toLowerCase(),items=$(gid).getElementsByClassName("risky-item");for(var i=0;i<items.length;i++){var s=items[i].getAttribute("data-search")||"";items[i].style.display=(s.indexOf(f)>-1)?"":"none"}}
+function sortTbl(tid,col){var table=$(tid),tbody=table.getElementsByTagName("tbody")[0],rows=tbody.getElementsByTagName("tr"),arr=[];for(var i=0;i<rows.length;i++)arr.push(rows[i]);var key=tid+"_"+col,asc=!sortDirs[key];sortDirs[key]=asc;
+    arr.sort(function(a,b){var tdA=a.getElementsByTagName("td")[col],tdB=b.getElementsByTagName("td")[col];var ca=tdA?(tdA.innerText||tdA.textContent||""):"",cb=tdB?(tdB.innerText||tdB.textContent||""):"";var na=parseFloat(ca),nb=parseFloat(cb);if(!isNaN(na)&&!isNaN(nb))return asc?na-nb:nb-na;ca=ca.toLowerCase();cb=cb.toLowerCase();return asc?(ca<cb?-1:ca>cb?1:0):(ca>cb?-1:ca<cb?1:0)});
+    for(i=0;i<arr.length;i++)tbody.appendChild(arr[i])}
+</script>
+</body>
+</html>
