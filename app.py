@@ -705,6 +705,7 @@ foreach ($member in $group.psbase.Invoke("Members")) {
     $domain = ""
     if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
     if ($domain -and $domain -ne $env:COMPUTERNAME) {
+        # Keep a single backslash in DOMAIN\user for downstream parsing.
         $fullname = "{0}\{1}" -f $domain, $name
     } else {
         $fullname = $name
@@ -791,6 +792,7 @@ $res | ConvertTo-Json -Compress
             pass
         try:
             cfg = self.config["ad_config"]
+            # Resolve WMI username for both domain-joined and local-account scenarios.
             if cfg.get("netbios_domain"):
                 wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
             else:
