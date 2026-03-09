@@ -603,11 +603,7 @@ class Scanner:
                 name = str(item)
                 obj_type = "unknown"
             name = name.strip()
-<<<<<<< HEAD
             if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
-=======
-            if name and "command completed" not in name.lower():
->>>>>>> origin/main
                 names.append({"name": name, "type": obj_type})
         return names
 
@@ -709,12 +705,8 @@ foreach ($member in $group.psbase.Invoke("Members")) {
     $domain = ""
     if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
     if ($domain -and $domain -ne $env:COMPUTERNAME) {
-<<<<<<< HEAD
         # Keep a single backslash in DOMAIN\user for downstream parsing.
         $fullname = "{0}\{1}" -f $domain, $name
-=======
-        $fullname = $domain + "\" + $name
->>>>>>> origin/main
     } else {
         $fullname = $name
     }
@@ -758,13 +750,8 @@ $raw = net localgroup $groupName 2>&1
 $started = $false; $res = @()
 foreach ($line in $raw) {
     $s = "$line".Trim()
-<<<<<<< HEAD
     if ($s -match '^-{3,}$') { $started = $true; continue }
     if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
-=======
-    if ($s -eq '---') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
->>>>>>> origin/main
 }
 $res | ConvertTo-Json -Compress
 """.replace("__GROUP_SID__", sid)
@@ -805,7 +792,6 @@ $res | ConvertTo-Json -Compress
             pass
         try:
             cfg = self.config["ad_config"]
-<<<<<<< HEAD
             # Resolve WMI username for both domain-joined and local-account scenarios.
             if cfg.get("netbios_domain"):
                 wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
@@ -814,34 +800,131 @@ $res | ConvertTo-Json -Compress
             c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
             members = []
             scanned_groups = []
+            seen_members = set()
             for target_group in self._get_local_groups():
                 sid = target_group["sid"]
                 group_name = target_group["name"]
                 for group in c.Win32_Group(SID=sid):
                     scanned_groups.append(group_name)
-                    for a in group.associators(wmi_result_class="Win32_UserAccount"):
-                        members.append({"name": a.Caption, "type": "User", "source_group": group_name})
-                    for a in group.associators(wmi_result_class="Win32_Group"):
-                        members.append({"name": a.Caption, "type": "Group", "source_group": group_name})
-                    for a in group.associators(wmi_result_class="Win32_SystemAccount"):
-                        members.append({"name": a.Caption, "type": "WellKnownGroup", "source_group": group_name})
+
+                    # 1) Standard user/group/system account association paths
+                    for rclass, rtype in [
+                        ("Win32_UserAccount", "User"),
+                        ("Win32_Group", "Group"),
+                        ("Win32_SystemAccount", "WellKnownGroup"),
+                        ("Win32_SID", "SID"),
+                    ]:
+                        try:
+                            assoc_items = group.associators(wmi_result_class=rclass)
+                        except Exception:
+                            assoc_items = []
+                        for a in assoc_items:
+                            name = getattr(a, "Caption", None) or getattr(a, "Name", None) or getattr(a, "SID", None) or ""
+                            name = str(name).strip()
+                            if not name:
+                                continue
+                            key = (name.lower(), rtype, group_name)
+                            if key in seen_members:
+                                continue
+                            seen_members.add(key)
+                            members.append({"name": name, "type": rtype, "source_group": group_name})
+
+                    # 2) Raw association fallback: catches unresolved SIDs / foreign principals
+                    try:
+                        raw_assoc = group.associators()
+                    except Exception:
+                        raw_assoc = []
+                    for a in raw_assoc:
+                        name = getattr(a, "Caption", None) or getattr(a, "Name", None) or getattr(a, "SID", None) or ""
+                        name = str(name).strip()
+                        if not name:
+                            continue
+                        obj_type = getattr(a, "Path_", None)
+                        if obj_type:
+                            obj_type = str(obj_type)
+                            if "Win32_Group" in obj_type:
+                                typ = "Group"
+                            elif "Win32_UserAccount" in obj_type:
+                                typ = "User"
+                            elif "Win32_SystemAccount" in obj_type:
+                                typ = "WellKnownGroup"
+                            elif "Win32_SID" in obj_type:
+                                typ = "SID"
+                            else:
+                                typ = "unknown"
+                        else:
+                            typ = "unknown"
+                        key = (name.lower(), typ, group_name)
+                        if key in seen_members:
+                            continue
+                        seen_members.add(key)
+                        members.append({"name": name, "type": typ, "source_group": group_name})
+
+
+                # 3) Win32_GroupUser fallback parsing: captures relations that may not be resolved by associators()
+                try:
+                    rels = c.Win32_GroupUser()
+                except Exception:
+                    rels = []
+
+                def _kv_from_component(comp):
+                    vals = {}
+                    if not comp:
+                        return vals
+                    tail = str(comp).split(":", 1)[-1]
+                    if "." not in tail:
+                        return vals
+                    data = tail.split(".", 1)[1]
+                    for part in data.split(','):
+                        if "=" not in part:
+                            continue
+                        k, v = part.split("=", 1)
+                        vals[k.strip()] = v.strip().strip('"')
+                    return vals
+
+                for rel in rels:
+                    gc = getattr(rel, "GroupComponent", "")
+                    pc = getattr(rel, "PartComponent", "")
+                    gc_vals = _kv_from_component(gc)
+                    pc_vals = _kv_from_component(pc)
+
+                    # Match relation to one of selected local groups by resolved group name/domain when possible.
+                    group_name = None
+                    gc_name = (gc_vals.get("Name") or "").strip()
+                    gc_domain = (gc_vals.get("Domain") or "").strip().lower()
+                    for g in self._get_local_groups():
+                        if g["name"].lower() == gc_name.lower():
+                            if not gc_domain or gc_domain == computer.lower() or gc_domain == ".":
+                                group_name = g["name"]
+                                break
+                    if not group_name:
+                        continue
+
+                    obj_name = pc_vals.get("Caption") or pc_vals.get("Name") or pc_vals.get("SID") or ""
+                    obj_name = str(obj_name).strip()
+                    if not obj_name:
+                        continue
+
+                    pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
+                    if "Win32_Group" in pclass:
+                        ptype = "Group"
+                    elif "Win32_UserAccount" in pclass:
+                        ptype = "User"
+                    elif "Win32_SystemAccount" in pclass:
+                        ptype = "WellKnownGroup"
+                    elif "Win32_SID" in pclass:
+                        ptype = "SID"
+                    else:
+                        ptype = "unknown"
+
+                    key = (obj_name.lower(), ptype, group_name)
+                    if key in seen_members:
+                        continue
+                    seen_members.add(key)
+                    members.append({"name": obj_name, "type": ptype, "source_group": group_name})
             if members:
                 suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
                 return ("WMI" + suffix, members)
-=======
-            wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
-            c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
-            members = []
-            for group in c.Win32_Group(SID="S-1-5-32-544"):
-                for a in group.associators(wmi_result_class="Win32_UserAccount"):
-                    members.append({"name": a.Caption, "type": "User"})
-                for a in group.associators(wmi_result_class="Win32_Group"):
-                    members.append({"name": a.Caption, "type": "Group"})
-                for a in group.associators(wmi_result_class="Win32_SystemAccount"):
-                    members.append({"name": a.Caption, "type": "WellKnownGroup"})
-            if members:
-                return ("WMI", members)
->>>>>>> origin/main
             return (None, "WMI: empty")
         except Exception as e:
             return (None, "WMI: " + str(e))
