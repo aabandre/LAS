@@ -859,6 +859,69 @@ $res | ConvertTo-Json -Compress
                             continue
                         seen_members.add(key)
                         members.append({"name": name, "type": typ, "source_group": group_name})
+
+
+                # 3) Win32_GroupUser fallback parsing: captures relations that may not be resolved by associators()
+                try:
+                    rels = c.Win32_GroupUser()
+                except Exception:
+                    rels = []
+
+                def _kv_from_component(comp):
+                    vals = {}
+                    if not comp:
+                        return vals
+                    tail = str(comp).split(":", 1)[-1]
+                    if "." not in tail:
+                        return vals
+                    data = tail.split(".", 1)[1]
+                    for part in data.split(','):
+                        if "=" not in part:
+                            continue
+                        k, v = part.split("=", 1)
+                        vals[k.strip()] = v.strip().strip('"')
+                    return vals
+
+                for rel in rels:
+                    gc = getattr(rel, "GroupComponent", "")
+                    pc = getattr(rel, "PartComponent", "")
+                    gc_vals = _kv_from_component(gc)
+                    pc_vals = _kv_from_component(pc)
+
+                    # Match relation to one of selected local groups by resolved group name/domain when possible.
+                    group_name = None
+                    gc_name = (gc_vals.get("Name") or "").strip()
+                    gc_domain = (gc_vals.get("Domain") or "").strip().lower()
+                    for g in self._get_local_groups():
+                        if g["name"].lower() == gc_name.lower():
+                            if not gc_domain or gc_domain == computer.lower() or gc_domain == ".":
+                                group_name = g["name"]
+                                break
+                    if not group_name:
+                        continue
+
+                    obj_name = pc_vals.get("Caption") or pc_vals.get("Name") or pc_vals.get("SID") or ""
+                    obj_name = str(obj_name).strip()
+                    if not obj_name:
+                        continue
+
+                    pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
+                    if "Win32_Group" in pclass:
+                        ptype = "Group"
+                    elif "Win32_UserAccount" in pclass:
+                        ptype = "User"
+                    elif "Win32_SystemAccount" in pclass:
+                        ptype = "WellKnownGroup"
+                    elif "Win32_SID" in pclass:
+                        ptype = "SID"
+                    else:
+                        ptype = "unknown"
+
+                    key = (obj_name.lower(), ptype, group_name)
+                    if key in seen_members:
+                        continue
+                    seen_members.add(key)
+                    members.append({"name": obj_name, "type": ptype, "source_group": group_name})
             if members:
                 suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
                 return ("WMI" + suffix, members)
