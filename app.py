@@ -603,7 +603,11 @@ class Scanner:
                 name = str(item)
                 obj_type = "unknown"
             name = name.strip()
+<<<<<<< HEAD
             if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
+=======
+            if name and "command completed" not in name.lower():
+>>>>>>> origin/main
                 names.append({"name": name, "type": obj_type})
         return names
 
@@ -705,8 +709,12 @@ foreach ($member in $group.psbase.Invoke("Members")) {
     $domain = ""
     if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
     if ($domain -and $domain -ne $env:COMPUTERNAME) {
+<<<<<<< HEAD
         # Keep a single backslash in DOMAIN\user for downstream parsing.
         $fullname = "{0}\{1}" -f $domain, $name
+=======
+        $fullname = $domain + "\" + $name
+>>>>>>> origin/main
     } else {
         $fullname = $name
     }
@@ -750,8 +758,13 @@ $raw = net localgroup $groupName 2>&1
 $started = $false; $res = @()
 foreach ($line in $raw) {
     $s = "$line".Trim()
+<<<<<<< HEAD
     if ($s -match '^-{3,}$') { $started = $true; continue }
     if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
+=======
+    if ($s -eq '---') { $started = $true; continue }
+    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
+>>>>>>> origin/main
 }
 $res | ConvertTo-Json -Compress
 """.replace("__GROUP_SID__", sid)
@@ -792,6 +805,7 @@ $res | ConvertTo-Json -Compress
             pass
         try:
             cfg = self.config["ad_config"]
+<<<<<<< HEAD
             # Resolve WMI username for both domain-joined and local-account scenarios.
             if cfg.get("netbios_domain"):
                 wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
@@ -814,6 +828,20 @@ $res | ConvertTo-Json -Compress
             if members:
                 suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
                 return ("WMI" + suffix, members)
+=======
+            wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
+            c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
+            members = []
+            for group in c.Win32_Group(SID="S-1-5-32-544"):
+                for a in group.associators(wmi_result_class="Win32_UserAccount"):
+                    members.append({"name": a.Caption, "type": "User"})
+                for a in group.associators(wmi_result_class="Win32_Group"):
+                    members.append({"name": a.Caption, "type": "Group"})
+                for a in group.associators(wmi_result_class="Win32_SystemAccount"):
+                    members.append({"name": a.Caption, "type": "WellKnownGroup"})
+            if members:
+                return ("WMI", members)
+>>>>>>> origin/main
             return (None, "WMI: empty")
         except Exception as e:
             return (None, "WMI: " + str(e))
