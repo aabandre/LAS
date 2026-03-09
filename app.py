@@ -53,6 +53,13 @@ BUILTIN_ADMINS = {
     "schema admins", "администраторы схемы",
 }
 
+LOCAL_GROUP_PRESETS = {
+    "S-1-5-32-544": {"key": "administrators", "name": "Administrators"},
+    "S-1-5-32-555": {"key": "remote_desktop_users", "name": "Remote Desktop Users"},
+    "S-1-5-32-562": {"key": "distributed_com_users", "name": "Distributed COM Users"},
+    "S-1-5-32-580": {"key": "remote_management_users", "name": "Remote Management Users"},
+}
+
 app = FastAPI()
 
 if getattr(sys, "frozen", False):
@@ -613,13 +620,83 @@ class Scanner:
             result["via_group"] = via_group
         return result
 
+    def _normalize_group_targets(self):
+        selected = self.config.get("group_targets")
+        if not selected:
+            return ["S-1-5-32-544"]
+
+        normalized = []
+        for sid in selected:
+            sid_str = str(sid).strip()
+            if sid_str in LOCAL_GROUP_PRESETS:
+                normalized.append(sid_str)
+
+        if not normalized:
+            return ["S-1-5-32-544"]
+        return normalized
+
+    def _get_local_groups(self):
+        groups = []
+        for sid in self._normalize_group_targets():
+            preset = LOCAL_GROUP_PRESETS.get(sid)
+            if preset:
+                groups.append({
+                    "sid": sid,
+                    "key": preset["key"],
+                    "name": preset["name"],
+                })
+        return groups
+
+    def _expand_with_domain_aliases(self, members, aliases):
+        if not aliases:
+            return members
+
+        alias_set = set()
+        for alias in aliases:
+            a = str(alias).strip().lower()
+            if a:
+                alias_set.add(a)
+
+        if not alias_set:
+            return members
+
+        expanded = []
+        for m in members:
+            expanded.append(m)
+            name = (m.get("name") or "").strip()
+            obj_type = m.get("type") or "unknown"
+            if "\\" not in name:
+                continue
+            domain, short = name.split("\\", 1)
+            if not short:
+                continue
+            domain_lower = domain.strip().lower()
+            if domain_lower in alias_set:
+                for alias in sorted(alias_set):
+                    if alias == domain_lower:
+                        continue
+                    alt_name = alias.upper() + "\\" + short
+                    expanded.append({"name": alt_name, "type": obj_type})
+        return expanded
+
     def _try_winrm_methods(self, computer, use_ssl=False):
         session = self._make_session(computer, use_ssl=use_ssl)
-        last_error = None
+        selected_groups = self._get_local_groups()
+        all_members = []
+        method_labels = []
+        errors = []
 
-        try:
-            script = r"""
-$group = [ADSI]"WinNT://./S-1-5-32-544,group"
+        for group in selected_groups:
+            sid = group["sid"]
+            group_name = group["name"]
+            group_members = None
+            group_method = None
+            last_error = None
+
+            try:
+                script = r"""
+$targetSid = "__GROUP_SID__"
+$group = [ADSI]("WinNT://./" + $targetSid + ",group")
 $result = @()
 foreach ($member in $group.psbase.Invoke("Members")) {
     $cls  = $member.GetType().InvokeMember("Class",  'GetProperty', $null, $member, $null)
@@ -628,93 +705,79 @@ foreach ($member in $group.psbase.Invoke("Members")) {
     $domain = ""
     if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
     if ($domain -and $domain -ne $env:COMPUTERNAME) {
-        $fullname = $domain + "\" + $name
+        $fullname = "{0}\{1}" -f $domain, $name
     } else {
         $fullname = $name
     }
     $result += @{ Name = $fullname; Type = $cls }
 }
 $result | ConvertTo-Json -Compress -Depth 3
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-ADSI", members)
-        except Exception as e:
-            last_error = e
+""".replace("__GROUP_SID__", sid)
+                raw = self._run_ps(session, script, computer)
+                members = self._extract_names(raw)
+                if members:
+                    group_method = "WinRM-ADSI"
+                    group_members = members
+            except Exception as e:
+                last_error = e
 
-        try:
-            script = r"""
-$sid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
-$group = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+            if group_members is None:
+                try:
+                    script = r"""
+$targetSid = "__GROUP_SID__"
+$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
+$group = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
 Get-LocalGroupMember -Group $group |
     Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}} |
     ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-GLGM", members)
-        except Exception as e:
-            last_error = e
+""".replace("__GROUP_SID__", sid)
+                    raw = self._run_ps(session, script, computer)
+                    members = self._extract_names(raw)
+                    if members:
+                        group_method = "WinRM-GLGM"
+                        group_members = members
+                except Exception as e:
+                    last_error = e
 
-        try:
-            script = r"""
-$sid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
-$groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+            if group_members is None:
+                try:
+                    script = r"""
+$targetSid = "__GROUP_SID__"
+$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
+$groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
 $raw = net localgroup $groupName 2>&1
 $started = $false; $res = @()
 foreach ($line in $raw) {
     $s = "$line".Trim()
-    if ($s -eq '---') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
+    if ($s -match '^-{3,}$') { $started = $true; continue }
+    if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена') { $res += $s }
 }
 $res | ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-NET-SID", members)
-        except Exception as e:
-            last_error = e
+""".replace("__GROUP_SID__", sid)
+                    raw = self._run_ps(session, script, computer)
+                    members = self._extract_names(raw)
+                    if members:
+                        group_method = "WinRM-NET-SID"
+                        group_members = members
+                except Exception as e:
+                    last_error = e
 
-        try:
-            script = r"""
-$raw = net localgroup Administrators 2>&1
-$started = $false; $res = @()
-foreach ($line in $raw) {
-    $s = "$line".Trim()
-    if ($s -eq '---') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
-}
-$res | ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-NET-EN", members)
-        except Exception as e:
-            last_error = e
+            if group_members is None:
+                errors.append(group_name + ": " + str(last_error)[:120])
+                continue
 
-        try:
-            script = u"""
-$raw = net localgroup \u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b 2>&1
-$started = $false; $res = @()
-foreach ($line in $raw) {
-    $s = "$line".Trim()
-    if ($s -eq '---') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
-}
-$res | ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-NET-RU", members)
-        except Exception as e:
-            last_error = e
+            for member in group_members:
+                member["source_group"] = group_name
+            all_members.extend(group_members)
+            method_labels.append(group_method + "[" + group_name + "]")
 
-        return (None, last_error)
+        if all_members:
+            method = ",".join(method_labels) if method_labels else "WinRM"
+            return (method, all_members)
+
+        if errors:
+            return (None, "; ".join(errors))
+        return (None, "No data returned")
 
     def _try_wmi(self, computer):
         if not WMI_AVAILABLE:
@@ -728,18 +791,27 @@ $res | ConvertTo-Json -Compress
             pass
         try:
             cfg = self.config["ad_config"]
-            wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
+            if cfg.get("netbios_domain"):
+                wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
+            else:
+                wmi_user = cfg["username"]
             c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
             members = []
-            for group in c.Win32_Group(SID="S-1-5-32-544"):
-                for a in group.associators(wmi_result_class="Win32_UserAccount"):
-                    members.append({"name": a.Caption, "type": "User"})
-                for a in group.associators(wmi_result_class="Win32_Group"):
-                    members.append({"name": a.Caption, "type": "Group"})
-                for a in group.associators(wmi_result_class="Win32_SystemAccount"):
-                    members.append({"name": a.Caption, "type": "WellKnownGroup"})
+            scanned_groups = []
+            for target_group in self._get_local_groups():
+                sid = target_group["sid"]
+                group_name = target_group["name"]
+                for group in c.Win32_Group(SID=sid):
+                    scanned_groups.append(group_name)
+                    for a in group.associators(wmi_result_class="Win32_UserAccount"):
+                        members.append({"name": a.Caption, "type": "User", "source_group": group_name})
+                    for a in group.associators(wmi_result_class="Win32_Group"):
+                        members.append({"name": a.Caption, "type": "Group", "source_group": group_name})
+                    for a in group.associators(wmi_result_class="Win32_SystemAccount"):
+                        members.append({"name": a.Caption, "type": "WellKnownGroup", "source_group": group_name})
             if members:
-                return ("WMI", members)
+                suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
+                return ("WMI" + suffix, members)
             return (None, "WMI: empty")
         except Exception as e:
             return (None, "WMI: " + str(e))
@@ -824,12 +896,22 @@ $res | ConvertTo-Json -Compress
                     if isinstance(entry, dict):
                         name = entry.get("name", "")
                         ot = entry.get("type", "unknown")
+                        src_group = entry.get("source_group")
                     else:
                         name = str(entry)
                         ot = "unknown"
+                        src_group = None
                     name = name.strip()
                     if name:
-                        classified.append(self._classify_member(name, ot))
+                        cm = self._classify_member(name, ot)
+                        if src_group:
+                            cm["source_group"] = src_group
+                        classified.append(cm)
+
+                classified = self._expand_with_domain_aliases(
+                    classified,
+                    self.config.get("domain_aliases", []),
+                )
 
                 # Разворачиваем доменные группы
                 try:
