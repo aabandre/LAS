@@ -603,7 +603,7 @@ class Scanner:
                 name = str(item)
                 obj_type = "unknown"
             name = name.strip()
-            if name and "command completed" not in name.lower():
+            if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
                 names.append({"name": name, "type": obj_type})
         return names
 
@@ -751,7 +751,7 @@ $started = $false; $res = @()
 foreach ($line in $raw) {
     $s = "$line".Trim()
     if ($s -match '^-{3,}$') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена') { $res += $s }
+    if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
 }
 $res | ConvertTo-Json -Compress
 """.replace("__GROUP_SID__", sid)
