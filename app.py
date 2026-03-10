@@ -242,6 +242,7 @@ class Scanner:
         self._error_count = 0
         self._start_time = None
         self.ldap_conn = None
+        self.ldap_gc_conn = None
         self.executor = None
         self.config = {}
 
@@ -341,6 +342,31 @@ class Scanner:
         )
         logger.info("LDAP connected to %s", cfg["server"])
 
+    def ensure_ldap_gc(self):
+        if self.ldap_gc_conn and self.ldap_gc_conn.bound:
+            return
+        cfg = self.config.get("ad_config", {})
+        server = ldap3.Server(cfg["server"], port=3268, get_info=ldap3.NONE)
+        user = cfg["username"]
+        if "@" not in user:
+            user = user + "@" + cfg["domain"]
+        self.ldap_gc_conn = ldap3.Connection(
+            server, user=user, password=cfg["password"],
+            authentication=ldap3.SIMPLE, auto_bind=True,
+        )
+        logger.info("LDAP GC connected to %s:3268", cfg["server"])
+
+    @staticmethod
+    def _escape_ldap_value(value):
+        s = str(value or "")
+        return (
+            s.replace("\\", "\\5c")
+             .replace("*", "\\2a")
+             .replace("(", "\\28")
+             .replace(")", "\\29")
+             .replace("\x00", "\\00")
+        )
+
     def get_computers(self, ou_dn):
         if not ou_dn:
             return []
@@ -386,7 +412,6 @@ class Scanner:
         """
         cfg = self.config.get("ad_config", {})
         domain = cfg.get("domain", "")
-        netbios = cfg.get("netbios_domain", "")
 
         if not domain:
             return members_list
@@ -401,14 +426,13 @@ class Scanner:
             # Определяем — это доменная учётка или локальная
             is_domain = False
             account_name = name
-            domain_part = ""
 
             if "\\" in name:
                 parts = name.split("\\", 1)
                 domain_part = parts[0]
                 account_name = parts[1]
-                # Доменная если domain_part совпадает с netbios или не является именем компьютера
-                if domain_part.lower() == netbios.lower():
+                # Любая запись DOMAIN\\name считаем доменной для попытки LDAP-развёртки.
+                if domain_part:
                     is_domain = True
             elif "@" in name:
                 is_domain = True
@@ -421,7 +445,7 @@ class Scanner:
             if is_domain and (is_group or obj_type.lower() == "unknown"):
                 try:
                     group_members = self._resolve_group_members(
-                        account_name, domain_part, seen_groups
+                        account_name, seen_groups
                     )
                     if group_members is not None:
                         # Это группа — добавляем саму группу + развёрнутых
@@ -442,7 +466,7 @@ class Scanner:
 
         return expanded
 
-    def _resolve_group_members(self, group_name, domain_part, seen_groups, depth=0):
+    def _resolve_group_members(self, group_name, seen_groups, depth=0):
         """
         Рекурсивно разворачивает доменную группу через LDAP.
         Возвращает список участников или None если это не группа.
@@ -451,7 +475,7 @@ class Scanner:
         if depth > 5:
             return []
 
-        group_key = (group_name.lower(), domain_part.lower())
+        group_key = group_name.lower()
         if group_key in seen_groups:
             return []  # цикл
         seen_groups.add(group_key)
@@ -461,32 +485,45 @@ class Scanner:
         except Exception:
             return None
 
+        escaped_group = self._escape_ldap_value(group_name)
+        search_filter = "(&(objectClass=group)(sAMAccountName=" + escaped_group + "))"
+
+        # Сначала ищем в текущем домене, затем в Global Catalog (все домены леса).
         cfg = self.config.get("ad_config", {})
         domain = cfg.get("domain", "")
-        base_dn = ",".join("DC=" + p for p in domain.split("."))
+        base_dn = ",".join("DC=" + p for p in domain.split(".")) if domain else ""
 
-        # Ищем группу по sAMAccountName
-        search_filter = (
-            "(&(objectClass=group)(sAMAccountName=" +
-            group_name.replace("(", "\\28").replace(")", "\\29") +
-            "))"
-        )
+        entry = None
+        if base_dn:
+            try:
+                self.ldap_conn.search(
+                    search_base=base_dn,
+                    search_filter=search_filter,
+                    search_scope=ldap3.SUBTREE,
+                    attributes=["distinguishedName", "member", "cn"],
+                )
+                if self.ldap_conn.entries:
+                    entry = self.ldap_conn.entries[0]
+            except Exception as e:
+                logger.debug("LDAP search failed for group %s in base domain: %s", group_name, e)
 
-        try:
-            self.ldap_conn.search(
-                search_base=base_dn,
-                search_filter=search_filter,
-                search_scope=ldap3.SUBTREE,
-                attributes=["distinguishedName", "member", "cn"],
-            )
-        except Exception as e:
-            logger.debug("LDAP search failed for group %s: %s", group_name, e)
-            return None
+        if entry is None:
+            try:
+                self.ensure_ldap_gc()
+                self.ldap_gc_conn.search(
+                    search_base="",
+                    search_filter=search_filter,
+                    search_scope=ldap3.SUBTREE,
+                    attributes=["distinguishedName", "member", "cn"],
+                )
+                if self.ldap_gc_conn.entries:
+                    entry = self.ldap_gc_conn.entries[0]
+            except Exception as e:
+                logger.debug("GC search failed for group %s: %s", group_name, e)
 
-        if not self.ldap_conn.entries:
+        if entry is None:
             return None  # не найдена — значит не группа или другой домен
 
-        entry = self.ldap_conn.entries[0]
         members_dn = entry.member.values if hasattr(entry, "member") and entry.member else []
 
         if not members_dn:
@@ -532,7 +569,7 @@ class Scanner:
 
         if "group" in obj_classes:
             # Рекурсия — разворачиваем вложенную группу
-            nested = self._resolve_group_members(sam, netbios, seen_groups, depth)
+            nested = self._resolve_group_members(sam, seen_groups, depth)
             items = [{"name": full_name, "type": "Group (nested)"}]
             if nested:
                 for nm in nested:
@@ -1371,6 +1408,11 @@ $res | ConvertTo-Json -Compress
             if self.ldap_conn:
                 try:
                     self.ldap_conn.unbind()
+                except Exception:
+                    pass
+            if self.ldap_gc_conn:
+                try:
+                    self.ldap_gc_conn.unbind()
                 except Exception:
                     pass
 
