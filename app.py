@@ -55,6 +55,7 @@ logger.addHandler(ch)
 
 BUILTIN_ADMINS = {
     "administrator", "администратор",
+    "administrators", "администраторы",
     "domain admins", "администраторы домена",
     "enterprise admins", "администраторы предприятия",
     "schema admins", "администраторы схемы",
@@ -1109,6 +1110,14 @@ $res | ConvertTo-Json -Compress
                 # Do not include the group SID itself as a member.
                 if nm.upper() == str(current_sid).upper():
                     return True
+
+                nm_l = nm.lower()
+                short = nm_l.split("\\", 1)[-1]
+                # Filter self/builtin alias noise that some providers return as a "member".
+                if nm_l in ("builtin\\administrators", "builtin\\администраторы"):
+                    return True
+                if short in ("administrators", "администраторы") and (nm_l.startswith("builtin\\") or nm_l in ("administrators", "администраторы")):
+                    return True
                 return False
 
             def _kv_from_component(comp):
@@ -1191,7 +1200,7 @@ $res | ConvertTo-Json -Compress
                     return []
                 result = []
                 try:
-                    server = "\\" + str(remote_host).split(".")[0]
+                    server = "\\\\" + str(remote_host).split(".")[0]
                     resume = 0
                     while True:
                         data, total, resume = win32net.NetLocalGroupGetMembers(server, local_group_name, 2, resume, 4096)
