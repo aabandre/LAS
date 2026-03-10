@@ -893,6 +893,19 @@ $res | ConvertTo-Json -Compress
                     vals[k.strip()] = v.strip().strip('"')
                 return vals
 
+            def _compose_account_name(vals, fallback=""):
+                domain_v = (vals.get("Domain") or "").strip()
+                name_v = (vals.get("Name") or "").strip()
+                if domain_v and name_v:
+                    return domain_v + "\\" + name_v
+                caption_v = (vals.get("Caption") or "").strip()
+                if caption_v:
+                    return caption_v
+                sid_v = (vals.get("SID") or "").strip()
+                if sid_v:
+                    return sid_v
+                return str(fallback or "").strip()
+
             for wmi_user in ordered_candidates:
                 c, conn_err = self._make_wmi_connection(
                     computer=computer,
@@ -996,7 +1009,7 @@ $res | ConvertTo-Json -Compress
                         for rel in rels:
                             pc = getattr(rel, "PartComponent", "")
                             pc_vals = _kv_from_component(pc)
-                            name = (pc_vals.get("Caption") or pc_vals.get("Name") or pc_vals.get("SID") or "").strip()
+                            name = _compose_account_name(pc_vals, fallback=pc)
                             if not name:
                                 continue
                             pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
@@ -1017,6 +1030,50 @@ $res | ConvertTo-Json -Compress
                                 continue
                             seen_members.add(key)
                             members.append({"name": name, "type": ptype, "source_group": group_name})
+
+                # 4) ASSOCIATORS OF fallback: often returns domain groups where standard paths are incomplete
+                for target_group in local_groups:
+                    sid = target_group["sid"]
+                    group_name = target_group["name"]
+                    groups = []
+                    try:
+                        groups = c.Win32_Group(SID=sid)
+                    except Exception:
+                        groups = []
+
+                    for group in groups:
+                        gpath = str(getattr(group, "path_", "") or getattr(group, "Path_", "")).strip()
+                        if not gpath:
+                            continue
+                        try:
+                            wql = "ASSOCIATORS OF {" + gpath + "} WHERE AssocClass=Win32_GroupUser"
+                            assoc_items = c.query(wql)
+                        except Exception:
+                            assoc_items = []
+
+                        for a in assoc_items:
+                            p = str(getattr(a, "Path_", ""))
+                            if "Win32_Group" in p:
+                                typ = "Group"
+                            elif "Win32_UserAccount" in p:
+                                typ = "User"
+                            elif "Win32_SystemAccount" in p:
+                                typ = "WellKnownGroup"
+                            elif "Win32_SID" in p:
+                                typ = "SID"
+                            else:
+                                continue
+
+                            vals = _kv_from_component(p)
+                            name = _compose_account_name(vals, fallback=_safe_member_name(a))
+                            if _skip_noise_name(name, sid):
+                                continue
+
+                            key = (name.lower(), typ, group_name)
+                            if key in seen_members:
+                                continue
+                            seen_members.add(key)
+                            members.append({"name": name, "type": typ, "source_group": group_name})
 
                 if members:
                     suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
