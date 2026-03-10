@@ -217,6 +217,32 @@ def calc_risk_score(members, allowed_admins=None):
     return {"score": score, "severity": severity, "reasons": reasons}
 
 
+def _build_machine_memberships(members):
+    grouped = defaultdict(list)
+    for m in members or []:
+        name = (m.get("name") or "").strip()
+        if not name:
+            continue
+        source_group = (m.get("source_group") or "").strip() or "(unknown local group)"
+        grouped[source_group].append({
+            "account": name,
+            "type": m.get("type", "unknown"),
+            "is_builtin": bool(m.get("is_builtin", False)),
+            "via_group": m.get("via_group", ""),
+        })
+
+    result = {}
+    for group_name, items in grouped.items():
+        uniq = {}
+        for item in items:
+            key = (item["account"].lower(), item.get("via_group", "").lower(), item.get("type", ""))
+            if key not in uniq:
+                uniq[key] = item
+        sorted_items = sorted(uniq.values(), key=lambda x: (x["account"].lower(), x.get("via_group", "").lower()))
+        result[group_name] = sorted_items
+    return result
+
+
 # ═══════════════════════════════════════
 #  SCANNER
 # ═══════════════════════════════════════
@@ -242,6 +268,7 @@ class Scanner:
         self._error_count = 0
         self._start_time = None
         self.ldap_conn = None
+        self.ldap_gc_conn = None
         self.executor = None
         self.config = {}
 
@@ -341,6 +368,51 @@ class Scanner:
         )
         logger.info("LDAP connected to %s", cfg["server"])
 
+    def ensure_ldap_gc(self):
+        if self.ldap_gc_conn and self.ldap_gc_conn.bound:
+            return
+        cfg = self.config.get("ad_config", {})
+        server = ldap3.Server(cfg["server"], port=3268, get_info=ldap3.NONE)
+        user = cfg["username"]
+        if "@" not in user:
+            user = user + "@" + cfg["domain"]
+        self.ldap_gc_conn = ldap3.Connection(
+            server, user=user, password=cfg["password"],
+            authentication=ldap3.SIMPLE, auto_bind=True,
+        )
+        logger.info("LDAP GC connected to %s:3268", cfg["server"])
+
+    def _credentials_for_target(self, comp_info=None):
+        base = dict(self.config.get("ad_config", {}) or {})
+        target_type = ""
+        if isinstance(comp_info, dict):
+            target_type = str(comp_info.get("target_type") or "").strip().lower()
+
+        if target_type != "server":
+            return base
+
+        override = dict(self.config.get("server_ad_config", {}) or {})
+        if not override:
+            return base
+
+        merged = dict(base)
+        for key in ("username", "password", "domain", "netbios_domain", "server"):
+            val = override.get(key)
+            if val:
+                merged[key] = val
+        return merged
+
+    @staticmethod
+    def _escape_ldap_value(value):
+        s = str(value or "")
+        return (
+            s.replace("\\", "\\5c")
+             .replace("*", "\\2a")
+             .replace("(", "\\28")
+             .replace(")", "\\29")
+             .replace("\x00", "\\00")
+        )
+
     def get_computers(self, ou_dn):
         if not ou_dn:
             return []
@@ -378,58 +450,244 @@ class Scanner:
         return computers
     # ── LDAP Group Expansion ──
 
+    @staticmethod
+    def _domain_from_dn(dn):
+        dn_value = str(dn or "")
+        parts = [part for part in dn_value.split(",") if part.upper().startswith("DC=")]
+        return ".".join(part[3:] for part in parts) if parts else ""
+
+    def _entry_account_name(self, entry, fallback=""):
+        sam = str(entry.sAMAccountName) if hasattr(entry, "sAMAccountName") and entry.sAMAccountName else ""
+        cn = str(entry.cn) if hasattr(entry, "cn") and entry.cn else ""
+        upn = str(entry.userPrincipalName) if hasattr(entry, "userPrincipalName") and entry.userPrincipalName else ""
+        dn_value = str(entry.distinguishedName) if hasattr(entry, "distinguishedName") and entry.distinguishedName else ""
+        domain = self._domain_from_dn(dn_value)
+
+        if sam and domain:
+            return domain + "\\" + sam
+        if sam:
+            return sam
+        if upn:
+            return upn
+        if cn:
+            return cn
+        return str(fallback or dn_value or "")
+
+    def _search_entry_first(self, search_filter, attributes=None, preferred_base=""):
+        if attributes is None:
+            attributes = ["distinguishedName"]
+
+        if preferred_base:
+            try:
+                self.ensure_ldap()
+                self.ldap_conn.search(
+                    search_base=preferred_base,
+                    search_filter=search_filter,
+                    search_scope=ldap3.SUBTREE,
+                    attributes=attributes,
+                    size_limit=1,
+                )
+                if self.ldap_conn.entries:
+                    return self.ldap_conn.entries[0]
+            except Exception as e:
+                logger.debug("LDAP search failed on preferred base %s: %s", preferred_base, e)
+
+        try:
+            self.ensure_ldap_gc()
+            self.ldap_gc_conn.search(
+                search_base="",
+                search_filter=search_filter,
+                search_scope=ldap3.SUBTREE,
+                attributes=attributes,
+                size_limit=1,
+            )
+            if self.ldap_gc_conn.entries:
+                return self.ldap_gc_conn.entries[0]
+        except Exception as e:
+            logger.debug("GC search failed for filter %s: %s", search_filter, e)
+
+        if not preferred_base:
+            return None
+
+        try:
+            self.ensure_ldap()
+            self.ldap_conn.search(
+                search_base=preferred_base,
+                search_filter=search_filter,
+                search_scope=ldap3.SUBTREE,
+                attributes=attributes,
+                size_limit=1,
+            )
+            if self.ldap_conn.entries:
+                return self.ldap_conn.entries[0]
+        except Exception as e:
+            logger.debug("LDAP retry failed for filter %s: %s", search_filter, e)
+        return None
+
+    def _resolve_group_entry(self, account_name, domain_hint=""):
+        cfg = self.config.get("ad_config", {})
+        root_domain = cfg.get("domain", "")
+        preferred_base = ",".join("DC=" + p for p in root_domain.split(".")) if root_domain else ""
+
+        account = str(account_name or "").strip()
+        if not account:
+            return None
+
+        escaped = self._escape_ldap_value(account)
+        filt = (
+            "(&(objectClass=group)(|"
+            "(sAMAccountName=" + escaped + ")"
+            "(cn=" + escaped + ")"
+            "(name=" + escaped + ")"
+            "))"
+        )
+
+        # Если есть доменный hint и это FQDN, сначала попробуем точный base DN для него.
+        hint = str(domain_hint or "").strip().lower()
+        if hint and "." in hint:
+            hint_base = ",".join("DC=" + p for p in hint.split("."))
+            entry = self._search_entry_first(filt, attributes=["distinguishedName", "member", "cn", "sAMAccountName", "userPrincipalName"], preferred_base=hint_base)
+            if entry is not None:
+                return entry
+
+        return self._search_entry_first(
+            filt,
+            attributes=["distinguishedName", "member", "cn", "sAMAccountName", "userPrincipalName"],
+            preferred_base=preferred_base,
+        )
+
+    def _resolve_group_members(self, group_name, seen_groups, depth=0, domain_hint=""):
+        if depth > 5:
+            return []
+
+        group_key = (str(group_name or "").lower(), str(domain_hint or "").lower())
+        if group_key in seen_groups:
+            return []
+        seen_groups.add(group_key)
+
+        group_entry = self._resolve_group_entry(group_name, domain_hint=domain_hint)
+        if group_entry is None:
+            return None
+
+        group_dn = str(group_entry.distinguishedName) if hasattr(group_entry, "distinguishedName") and group_entry.distinguishedName else ""
+        if not group_dn:
+            return []
+
+        escaped_dn = self._escape_ldap_value(group_dn)
+        transitive_filter = (
+            "(&(|(objectClass=user)(objectClass=group)(objectClass=computer))"
+            "(memberOf:1.2.840.113556.1.4.1941:=" + escaped_dn + "))"
+        )
+
+        attrs = ["objectClass", "sAMAccountName", "cn", "userPrincipalName", "distinguishedName"]
+        members = []
+        seen_names = set()
+
+        try:
+            self.ensure_ldap_gc()
+            self.ldap_gc_conn.search(
+                search_base="",
+                search_filter=transitive_filter,
+                search_scope=ldap3.SUBTREE,
+                attributes=attrs,
+                paged_size=1000,
+            )
+            while True:
+                for entry in self.ldap_gc_conn.entries:
+                    name = self._entry_account_name(entry)
+                    if not name:
+                        continue
+                    lower = name.lower()
+                    if lower in seen_names:
+                        continue
+                    seen_names.add(lower)
+
+                    obj_classes = [str(c).lower() for c in entry.objectClass.values] if entry.objectClass else []
+                    if "group" in obj_classes:
+                        otype = "Group (nested)"
+                    elif "computer" in obj_classes:
+                        otype = "Computer"
+                    elif "user" in obj_classes or "person" in obj_classes:
+                        otype = "User"
+                    else:
+                        otype = "unknown"
+                    members.append({"name": name, "type": otype})
+
+                cookie = (
+                    self.ldap_gc_conn.result
+                    .get("controls", {})
+                    .get("1.2.840.113556.1.4.319", {})
+                    .get("value", {})
+                    .get("cookie")
+                )
+                if not cookie:
+                    break
+                self.ldap_gc_conn.search(
+                    search_base="",
+                    search_filter=transitive_filter,
+                    search_scope=ldap3.SUBTREE,
+                    attributes=attrs,
+                    paged_size=1000,
+                    paged_cookie=cookie,
+                )
+        except Exception as e:
+            logger.debug("Transitive GC member query failed for %s: %s", group_name, e)
+
+        if members:
+            return members
+
+        # Fallback: direct member list (если matching-rule не поддерживается)
+        raw_members = group_entry.member.values if hasattr(group_entry, "member") and group_entry.member else []
+        for dn in raw_members:
+            resolved = self._resolve_dn(dn, seen_groups, depth + 1)
+            for item in resolved:
+                nm = (item.get("name") or "").strip().lower()
+                if not nm or nm in seen_names:
+                    continue
+                seen_names.add(nm)
+                members.append(item)
+        return members
+
     def _expand_domain_groups(self, members_list):
-        """
-        Для каждого участника проверяет — является ли он доменной группой.
-        Если да — рекурсивно разворачивает через LDAP.
-        Возвращает расширенный список с полем 'via_group'.
-        """
         cfg = self.config.get("ad_config", {})
         domain = cfg.get("domain", "")
-        netbios = cfg.get("netbios_domain", "")
-
         if not domain:
             return members_list
 
         expanded = []
-        seen_groups = set()  # защита от циклов
+        seen_groups = set()
 
         for member in members_list:
-            name = member.get("name", "")
-            obj_type = member.get("type", "unknown")
+            name = (member.get("name") or "").strip()
+            obj_type = (member.get("type") or "unknown").strip()
+            is_group = obj_type.lower() in ("group", "группа", "group (nested)")
 
-            # Определяем — это доменная учётка или локальная
-            is_domain = False
             account_name = name
-            domain_part = ""
+            domain_hint = ""
+            is_domainish = False
 
             if "\\" in name:
-                parts = name.split("\\", 1)
-                domain_part = parts[0]
-                account_name = parts[1]
-                # Доменная если domain_part совпадает с netbios или не является именем компьютера
-                if domain_part.lower() == netbios.lower():
-                    is_domain = True
+                domain_hint, account_name = name.split("\\", 1)
+                is_domainish = bool(domain_hint)
             elif "@" in name:
-                is_domain = True
-                account_name = name.split("@")[0]
+                account_name, domain_hint = name.split("@", 1)
+                is_domainish = True
+            elif is_group:
+                # Некоторые WMI-методы возвращают доменные группы без префикса DOMAIN\\.
+                is_domainish = True
+            elif obj_type.lower() == "unknown" and account_name:
+                # Иногда доменная группа приходит как unknown и без DOMAIN\.
+                short = account_name.split("\\", 1)[-1].lower()
+                is_domainish = short not in BUILTIN_ADMINS
 
-            # Если тип Group и доменная — разворачиваем
-            is_group = obj_type.lower() in ("group", "группа")
-
-            # Если тип unknown но доменная — проверяем через LDAP
-            if is_domain and (is_group or obj_type.lower() == "unknown"):
+            if is_domainish and account_name and obj_type.lower() not in ("computer", "wellknowngroup"):
                 try:
-                    group_members = self._resolve_group_members(
-                        account_name, domain_part, seen_groups
-                    )
-                    if group_members is not None:
-                        # Это группа — добавляем саму группу + развёрнутых
+                    group_members = self._resolve_group_members(account_name, seen_groups, domain_hint=domain_hint)
+                    if group_members:
                         member["type"] = "Group"
                         member["expanded_members"] = group_members
                         member["expanded_count"] = len(group_members)
                         expanded.append(member)
-
                         for gm in group_members:
                             gm["via_group"] = name
                             expanded.append(gm)
@@ -437,102 +695,51 @@ class Scanner:
                 except Exception as e:
                     logger.debug("Group expand failed for %s: %s", name, e)
 
-            # Не группа или не удалось развернуть — добавляем как есть
             expanded.append(member)
 
         return expanded
 
-    def _resolve_group_members(self, group_name, domain_part, seen_groups, depth=0):
-        """
-        Рекурсивно разворачивает доменную группу через LDAP.
-        Возвращает список участников или None если это не группа.
-        Максимальная глубина рекурсии — 5.
-        """
-        if depth > 5:
-            return []
-
-        group_key = (group_name.lower(), domain_part.lower())
-        if group_key in seen_groups:
-            return []  # цикл
-        seen_groups.add(group_key)
-
-        try:
-            self.ensure_ldap()
-        except Exception:
-            return None
-
-        cfg = self.config.get("ad_config", {})
-        domain = cfg.get("domain", "")
-        base_dn = ",".join("DC=" + p for p in domain.split("."))
-
-        # Ищем группу по sAMAccountName
-        search_filter = (
-            "(&(objectClass=group)(sAMAccountName=" +
-            group_name.replace("(", "\\28").replace(")", "\\29") +
-            "))"
-        )
-
-        try:
-            self.ldap_conn.search(
-                search_base=base_dn,
-                search_filter=search_filter,
-                search_scope=ldap3.SUBTREE,
-                attributes=["distinguishedName", "member", "cn"],
-            )
-        except Exception as e:
-            logger.debug("LDAP search failed for group %s: %s", group_name, e)
-            return None
-
-        if not self.ldap_conn.entries:
-            return None  # не найдена — значит не группа или другой домен
-
-        entry = self.ldap_conn.entries[0]
-        members_dn = entry.member.values if hasattr(entry, "member") and entry.member else []
-
-        if not members_dn:
-            return []
-
-        result = []
-        for member_dn in members_dn:
-            member_info = self._resolve_dn(member_dn, seen_groups, depth + 1)
-            if member_info:
-                result.extend(member_info)
-
-        return result
-
     def _resolve_dn(self, dn, seen_groups, depth):
-        """
-        По DN определяет — пользователь или группа.
-        Если группа — рекурсивно разворачивает.
-        """
+        attrs = ["objectClass", "sAMAccountName", "cn", "userPrincipalName", "member", "distinguishedName"]
+        entry = None
+
         try:
-            self.ldap_conn.search(
-                search_base=dn,
+            self.ensure_ldap_gc()
+            self.ldap_gc_conn.search(
+                search_base=str(dn),
                 search_filter="(objectClass=*)",
                 search_scope=ldap3.BASE,
-                attributes=[
-                    "objectClass", "sAMAccountName", "cn",
-                    "userPrincipalName", "member", "objectCategory"
-                ],
+                attributes=attrs,
             )
+            if self.ldap_gc_conn.entries:
+                entry = self.ldap_gc_conn.entries[0]
         except Exception:
-            # DN может быть из другого домена
-            return [{"name": dn, "type": "unknown (cross-domain)"}]
+            entry = None
 
-        if not self.ldap_conn.entries:
-            return [{"name": dn, "type": "unknown"}]
+        if entry is None:
+            try:
+                self.ensure_ldap()
+                self.ldap_conn.search(
+                    search_base=str(dn),
+                    search_filter="(objectClass=*)",
+                    search_scope=ldap3.BASE,
+                    attributes=attrs,
+                )
+                if self.ldap_conn.entries:
+                    entry = self.ldap_conn.entries[0]
+            except Exception:
+                return [{"name": str(dn), "type": "unknown (cross-domain)"}]
 
-        entry = self.ldap_conn.entries[0]
+        if entry is None:
+            return [{"name": str(dn), "type": "unknown"}]
+
         obj_classes = [str(c).lower() for c in entry.objectClass.values] if entry.objectClass else []
-        sam = str(entry.sAMAccountName) if hasattr(entry, "sAMAccountName") and entry.sAMAccountName else ""
-
-        cfg = self.config.get("ad_config", {})
-        netbios = cfg.get("netbios_domain", "")
-        full_name = netbios + "\\" + sam if sam else str(entry.cn)
+        full_name = self._entry_account_name(entry, fallback=str(dn))
 
         if "group" in obj_classes:
-            # Рекурсия — разворачиваем вложенную группу
-            nested = self._resolve_group_members(sam, netbios, seen_groups, depth)
+            sam = str(entry.sAMAccountName) if hasattr(entry, "sAMAccountName") and entry.sAMAccountName else full_name
+            dom = self._domain_from_dn(str(entry.distinguishedName) if hasattr(entry, "distinguishedName") else "")
+            nested = self._resolve_group_members(sam, seen_groups, depth, domain_hint=dom)
             items = [{"name": full_name, "type": "Group (nested)"}]
             if nested:
                 for nm in nested:
@@ -540,16 +747,14 @@ class Scanner:
                 items.extend(nested)
             return items
 
-        elif "user" in obj_classes or "person" in obj_classes:
-            return [{"name": full_name, "type": "User"}]
-
-        elif "computer" in obj_classes:
+        if "computer" in obj_classes:
             return [{"name": full_name, "type": "Computer"}]
+        if "user" in obj_classes or "person" in obj_classes:
+            return [{"name": full_name, "type": "User"}]
+        return [{"name": full_name, "type": "unknown"}]
 
-        else:
-            return [{"name": full_name, "type": "unknown"}]
-    def _make_session(self, computer, use_ssl=False):
-        cfg = self.config["ad_config"]
+    def _make_session(self, computer, comp_info=None, use_ssl=False):
+        cfg = self._credentials_for_target(comp_info)
         if cfg.get("netbios_domain"):
             username = cfg["netbios_domain"] + "\\" + cfg["username"]
         else:
@@ -679,8 +884,8 @@ class Scanner:
                     expanded.append({"name": alt_name, "type": obj_type})
         return expanded
 
-    def _try_winrm_methods(self, computer, use_ssl=False):
-        session = self._make_session(computer, use_ssl=use_ssl)
+    def _try_winrm_methods(self, computer, comp_info=None, use_ssl=False):
+        session = self._make_session(computer, comp_info=comp_info, use_ssl=use_ssl)
         selected_groups = self._get_local_groups()
         all_members = []
         method_labels = []
@@ -821,7 +1026,7 @@ $res | ConvertTo-Json -Compress
             or "access denied" in txt
         )
 
-    def _try_wmi(self, computer):
+    def _try_wmi(self, computer, comp_info=None):
         if not WMI_AVAILABLE:
             return (None, "WMI not installed")
 
@@ -834,7 +1039,7 @@ $res | ConvertTo-Json -Compress
             pass
 
         try:
-            cfg = self.config["ad_config"]
+            cfg = self._credentials_for_target(comp_info)
             username = (cfg.get("username") or "").strip()
             domain = (cfg.get("domain") or "").strip()
             netbios = (cfg.get("netbios_domain") or "").strip()
@@ -863,6 +1068,27 @@ $res | ConvertTo-Json -Compress
 
             def _safe_member_name(obj):
                 return (getattr(obj, "Caption", None) or getattr(obj, "Name", None) or getattr(obj, "SID", None) or "").strip()
+
+            def _compose_member_name(obj, fallback=""):
+                domain_v = str(getattr(obj, "Domain", "") or "").strip()
+                name_v = str(getattr(obj, "Name", "") or "").strip()
+                if domain_v and name_v:
+                    return domain_v + "\\" + name_v
+
+                ref_domain = str(getattr(obj, "ReferencedDomainName", "") or "").strip()
+                account_name = str(getattr(obj, "AccountName", "") or "").strip()
+                if ref_domain and account_name:
+                    return ref_domain + "\\" + account_name
+                if account_name:
+                    return account_name
+
+                caption_v = str(getattr(obj, "Caption", "") or "").strip()
+                if caption_v:
+                    return caption_v
+                sid_v = str(getattr(obj, "SID", "") or "").strip()
+                if sid_v:
+                    return sid_v
+                return str(fallback or "").strip()
 
             def _skip_noise_name(name, current_sid):
                 if not name:
@@ -898,6 +1124,14 @@ $res | ConvertTo-Json -Compress
                 name_v = (vals.get("Name") or "").strip()
                 if domain_v and name_v:
                     return domain_v + "\\" + name_v
+
+                ref_domain = (vals.get("ReferencedDomainName") or "").strip()
+                account_name = (vals.get("AccountName") or "").strip()
+                if ref_domain and account_name:
+                    return ref_domain + "\\" + account_name
+                if account_name:
+                    return account_name
+
                 caption_v = (vals.get("Caption") or "").strip()
                 if caption_v:
                     return caption_v
@@ -905,6 +1139,45 @@ $res | ConvertTo-Json -Compress
                 if sid_v:
                     return sid_v
                 return str(fallback or "").strip()
+
+            sid_cache = {}
+
+            def _resolve_sid_identity(conn, sid_value):
+                sid_text = str(sid_value or "").strip()
+                if not sid_text or not sid_text.upper().startswith("S-"):
+                    return ("", "")
+                if sid_text in sid_cache:
+                    return sid_cache[sid_text]
+
+                resolved_name = ""
+                resolved_type = ""
+                try:
+                    sid_objs = conn.Win32_SID(SID=sid_text)
+                except Exception:
+                    sid_objs = []
+
+                for sid_obj in sid_objs:
+                    try:
+                        assoc = sid_obj.associators(wmi_result_class="Win32_Account")
+                    except Exception:
+                        assoc = []
+                    for acc in assoc:
+                        acc_name = _compose_member_name(acc, fallback="")
+                        if acc_name:
+                            resolved_name = acc_name
+                            pth = str(getattr(acc, "Path_", ""))
+                            if "Win32_Group" in pth:
+                                resolved_type = "Group"
+                            elif "Win32_UserAccount" in pth:
+                                resolved_type = "User"
+                            else:
+                                resolved_type = "Account"
+                            break
+                    if resolved_name:
+                        break
+
+                sid_cache[sid_text] = (resolved_name, resolved_type)
+                return sid_cache[sid_text]
 
             for wmi_user in ordered_candidates:
                 c, conn_err = self._make_wmi_connection(
@@ -954,14 +1227,21 @@ $res | ConvertTo-Json -Compress
                                     return (None, "WMI access denied while reading members of " + group_name)
                                 assoc_items = []
                             for a in assoc_items:
-                                name = _safe_member_name(a)
+                                name = _compose_member_name(a, fallback=_safe_member_name(a))
+                                member_type = rtype
+                                if member_type == "SID" or str(name).upper().startswith("S-"):
+                                    resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                    if resolved_name:
+                                        name = resolved_name
+                                        if resolved_type:
+                                            member_type = resolved_type
                                 if _skip_noise_name(name, sid):
                                     continue
-                                key = (name.lower(), rtype, group_name)
+                                key = (name.lower(), member_type, group_name)
                                 if key in seen_members:
                                     continue
                                 seen_members.add(key)
-                                members.append({"name": name, "type": rtype, "source_group": group_name})
+                                members.append({"name": name, "type": member_type, "source_group": group_name})
 
                         # 2) Raw association fallback
                         try:
@@ -971,7 +1251,7 @@ $res | ConvertTo-Json -Compress
                                 return (None, "WMI access denied while reading raw associations of " + group_name)
                             raw_assoc = []
                         for a in raw_assoc:
-                            name = _safe_member_name(a)
+                            name = _compose_member_name(a, fallback=_safe_member_name(a))
                             if not name:
                                 continue
                             p = str(getattr(a, "Path_", ""))
@@ -986,6 +1266,12 @@ $res | ConvertTo-Json -Compress
                             else:
                                 # Skip non-account objects to avoid noise (e.g. logical disks).
                                 continue
+                            if typ == "SID" or str(name).upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                if resolved_name:
+                                    name = resolved_name
+                                    if resolved_type:
+                                        typ = resolved_type
                             if _skip_noise_name(name, sid):
                                 continue
                             key = (name.lower(), typ, group_name)
@@ -1023,6 +1309,12 @@ $res | ConvertTo-Json -Compress
                                 ptype = "SID"
                             else:
                                 continue
+                            if ptype == "SID" or str(name).upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                if resolved_name:
+                                    name = resolved_name
+                                    if resolved_type:
+                                        ptype = resolved_type
                             if _skip_noise_name(name, sid):
                                 continue
                             key = (name.lower(), ptype, group_name)
@@ -1066,6 +1358,12 @@ $res | ConvertTo-Json -Compress
 
                             vals = _kv_from_component(p)
                             name = _compose_account_name(vals, fallback=_safe_member_name(a))
+                            if typ == "SID" or str(name).upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                if resolved_name:
+                                    name = resolved_name
+                                    if resolved_type:
+                                        typ = resolved_type
                             if _skip_noise_name(name, sid):
                                 continue
 
@@ -1126,7 +1424,7 @@ $res | ConvertTo-Json -Compress
             if p5985:
                 for attempt in range(2):
                     mt0 = time.time()
-                    m, r = self._try_winrm_methods(computer, False)
+                    m, r = self._try_winrm_methods(computer, comp_info=comp_info, use_ssl=False)
                     if m:
                         method = m
                         members = r
@@ -1141,7 +1439,7 @@ $res | ConvertTo-Json -Compress
 
             if members is None and p5986:
                 mt0 = time.time()
-                m, r = self._try_winrm_methods(computer, True)
+                m, r = self._try_winrm_methods(computer, comp_info=comp_info, use_ssl=True)
                 if m:
                     method = m
                     members = r
@@ -1151,7 +1449,7 @@ $res | ConvertTo-Json -Compress
 
             if members is None:
                 mt0 = time.time()
-                m, r = self._try_wmi(computer)
+                m, r = self._try_wmi(computer, comp_info=comp_info)
                 if m:
                     method = m
                     members = r
@@ -1256,9 +1554,15 @@ $res | ConvertTo-Json -Compress
             comp_list = []
             try:
                 if config.get("workstations_ou"):
-                    comp_list += self.get_computers(config["workstations_ou"])
+                    workstations = self.get_computers(config["workstations_ou"])
+                    for c in workstations:
+                        c["target_type"] = "workstation"
+                    comp_list += workstations
                 if config.get("servers_ou"):
-                    comp_list += self.get_computers(config["servers_ou"])
+                    servers = self.get_computers(config["servers_ou"])
+                    for c in servers:
+                        c["target_type"] = "server"
+                    comp_list += servers
             except Exception as e:
                 logger.error("LDAP: %s", e)
                 self.result_queue.put({"type": "error", "message": "LDAP: " + str(e)})
@@ -1373,10 +1677,17 @@ $res | ConvertTo-Json -Compress
                     self.ldap_conn.unbind()
                 except Exception:
                     pass
+            if self.ldap_gc_conn:
+                try:
+                    self.ldap_gc_conn.unbind()
+                except Exception:
+                    pass
 
             # Clear password from memory
             if self.config.get("ad_config"):
                 self.config["ad_config"]["password"] = "***CLEARED***"
+            if self.config.get("server_ad_config"):
+                self.config["server_ad_config"]["password"] = "***CLEARED***"
 
             self.running = False
             self.result_queue.put({
@@ -1402,6 +1713,7 @@ $res | ConvertTo-Json -Compress
         risky_machines = []
         risky_details = {}
         machine_risks = {}
+        machine_memberships = {}
         scan_times = []
         success_count = 0
         error_count = 0
@@ -1427,6 +1739,14 @@ $res | ConvertTo-Json -Compress
 
             if res.get("error"):
                 error_count += 1
+                machine_memberships[res["computer"]] = {
+                    "os": res.get("os", ""),
+                    "method": res.get("method", ""),
+                    "scan_time_sec": res.get("scan_time_sec", 0),
+                    "ports": res.get("ports", {}),
+                    "error": res.get("error", ""),
+                    "groups": {},
+                }
                 err = res["error"]
                 if "DNS failed" in err:
                     error_types["DNS failed"] += 1
@@ -1448,6 +1768,14 @@ $res | ConvertTo-Json -Compress
             sev = risk.get("severity", "clean")
             severity_counts[sev] += 1
             machine_risks[res["computer"]] = risk
+            machine_memberships[res["computer"]] = {
+                "os": res.get("os", ""),
+                "method": res.get("method", ""),
+                "scan_time_sec": res.get("scan_time_sec", 0),
+                "ports": res.get("ports", {}),
+                "error": "",
+                "groups": _build_machine_memberships(res.get("members", [])),
+            }
 
             has_nonbuiltin = False
             nonbuiltin_names = []
@@ -1550,6 +1878,7 @@ $res | ConvertTo-Json -Compress
             "risky_machines": sorted(risky_machines),
             "risky_details": risky_details,
             "machine_risks": machine_risks,
+            "machine_memberships": machine_memberships,
             "metrics": metrics.get_stats(),
         }
     def stop(self):
@@ -1605,6 +1934,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
     risky_machines = []
     risky_details = {}
     machine_risks = {}
+    machine_memberships = {}
     scan_times = []
     success_count = 0
     error_count = 0
@@ -1630,6 +1960,14 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
         if res.get("error"):
             error_count += 1
+            machine_memberships[res["computer"]] = {
+                "os": res.get("os", ""),
+                "method": res.get("method", ""),
+                "scan_time_sec": res.get("scan_time_sec", 0),
+                "ports": res.get("ports", {}),
+                "error": res.get("error", ""),
+                "groups": {},
+            }
             err = res["error"]
             if "DNS failed" in err:
                 error_types["DNS failed"] += 1
@@ -1651,6 +1989,14 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
         sev = risk.get("severity", "clean")
         severity_counts[sev] += 1
         machine_risks[res["computer"]] = risk
+        machine_memberships[res["computer"]] = {
+            "os": res.get("os", ""),
+            "method": res.get("method", ""),
+            "scan_time_sec": res.get("scan_time_sec", 0),
+            "ports": res.get("ports", {}),
+            "error": "",
+            "groups": _build_machine_memberships(res.get("members", [])),
+        }
 
         has_nonbuiltin = False
         nonbuiltin_names = []
@@ -1747,6 +2093,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
         "risky_machines": sorted(risky_machines),
         "risky_details": risky_details,
         "machine_risks": machine_risks,
+        "machine_memberships": machine_memberships,
         "metrics": summary_data.get("metrics", {}),
     }
 
