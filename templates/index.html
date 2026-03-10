@@ -89,6 +89,8 @@
             <div class="col-right">
                 <div class="form-row"><label data-i18n="lbl_user">Username:</label><input type="text" id="cfgUser"></div>
                 <div class="form-row"><label data-i18n="lbl_pass">Password:</label><input type="password" id="cfgPass"></div>
+                <div class="form-row"><label data-i18n="lbl_srv_user">Server Username (optional):</label><input type="text" id="cfgSrvUser"></div>
+                <div class="form-row"><label data-i18n="lbl_srv_pass">Server Password (optional):</label><input type="password" id="cfgSrvPass"></div>
                 <div class="form-row"><label data-i18n="lbl_threads">Max Threads:</label><input type="number" id="cfgThreads" value="20"></div>
             </div>
         </div>
@@ -157,6 +159,8 @@ var LANG = {
         lbl_netbios: "NetBIOS Domain:",
         lbl_user: "Username:",
         lbl_pass: "Password:",
+        lbl_srv_user: "Server Username (optional):",
+        lbl_srv_pass: "Server Password (optional):",
         lbl_threads: "Max Threads:",
         lbl_ou_work: "Workstations OU:",
         lbl_ou_srv: "Servers OU:",
@@ -203,6 +207,8 @@ var LANG = {
         lbl_netbios: "NetBIOS \u0434\u043e\u043c\u0435\u043d:",
         lbl_user: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:",
         lbl_pass: "\u041f\u0430\u0440\u043e\u043b\u044c:",
+        lbl_srv_user: "\u041b\u043e\u0433\u0438\u043d \u0434\u043b\u044f \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432 (\u043e\u043f\u0446\u0438\u043e\u043d\u0430\u043b\u044c\u043d\u043e):",
+        lbl_srv_pass: "\u041f\u0430\u0440\u043e\u043b\u044c \u0434\u043b\u044f \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432 (\u043e\u043f\u0446\u0438\u043e\u043d\u0430\u043b\u044c\u043d\u043e):",
         lbl_threads: "\u041c\u0430\u043a\u0441. \u043f\u043e\u0442\u043e\u043a\u043e\u0432:",
         lbl_ou_work: "OU \u0440\u0430\u0431\u043e\u0447\u0438\u0445 \u0441\u0442\u0430\u043d\u0446\u0438\u0439:",
         lbl_ou_srv: "OU \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432:",
@@ -327,8 +333,8 @@ function saveSettings(){
     try{
         var data = {
             server:val("cfgServer"),domain:val("cfgDomain"),netbios:val("cfgNetbios"),
-            user:val("cfgUser"),ouWork:val("cfgOuWork"),ouSrv:val("cfgOuSrv"),
-            threads:val("cfgThreads"),timeout:val("cfgTimeout"),
+            user:val("cfgUser"),srvUser:val("cfgSrvUser"),ouWork:val("cfgOuWork"),ouSrv:val("cfgOuSrv"),
+            pass:"",srvPass:"",threads:val("cfgThreads"),timeout:val("cfgTimeout"),
             allowed:val("cfgAllowed"),domainAliases:val("cfgDomainAliases"),
             groups:{
                 administrators:$("grpAdministrators").checked,
@@ -357,6 +363,7 @@ function applySettings(d){
     if(d.domain) $("cfgDomain").value=d.domain;
     if(d.netbios) $("cfgNetbios").value=d.netbios;
     if(d.user) $("cfgUser").value=d.user;
+    if(d.srvUser) $("cfgSrvUser").value=d.srvUser;
     if(d.ouWork) $("cfgOuWork").value=d.ouWork;
     if(d.ouSrv) $("cfgOuSrv").value=d.ouSrv;
     if(d.threads) $("cfgThreads").value=d.threads;
@@ -404,6 +411,7 @@ function doStart(){
 
     var config={scan:{
         ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:val("cfgUser"),password:val("cfgPass")},
+        server_ad_config:{username:val("cfgSrvUser"),password:val("cfgSrvPass")},
         workstations_ou:val("cfgOuWork"),servers_ou:val("cfgOuSrv"),
         max_threads:parseInt(val("cfgThreads"),10)||20,
         host_timeout:parseInt(val("cfgTimeout"),10)||40,
@@ -477,6 +485,7 @@ function pollAll(){
                 addLog(t("scan_completed"),"log-done","",false,null);
                 $("btnStart").disabled=false;$("btnStop").disabled=true;
                 $("cfgPass").value="";
+                $("cfgSrvPass").value="";
                 if(pollTimer){clearInterval(pollTimer);pollTimer=null}
                 var h="";
                 if(ev.json)h+='<a href="/download/'+ev.json+'">JSON</a>';
