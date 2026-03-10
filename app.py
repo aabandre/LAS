@@ -1229,8 +1229,9 @@ $res | ConvertTo-Json -Compress
                             for a in assoc_items:
                                 name = _compose_member_name(a, fallback=_safe_member_name(a))
                                 member_type = rtype
-                                if member_type == "SID" or str(name).upper().startswith("S-"):
-                                    resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                sid_candidate = str(getattr(a, "SID", "") or "").strip()
+                                if member_type == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
+                                    resolved_name, resolved_type = _resolve_sid_identity(c, sid_candidate or name)
                                     if resolved_name:
                                         name = resolved_name
                                         if resolved_type:
@@ -1266,8 +1267,9 @@ $res | ConvertTo-Json -Compress
                             else:
                                 # Skip non-account objects to avoid noise (e.g. logical disks).
                                 continue
-                            if typ == "SID" or str(name).upper().startswith("S-"):
-                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                            sid_candidate = str(getattr(a, "SID", "") or "").strip()
+                            if typ == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, sid_candidate or name)
                                 if resolved_name:
                                     name = resolved_name
                                     if resolved_type:
@@ -1309,12 +1311,55 @@ $res | ConvertTo-Json -Compress
                                 ptype = "SID"
                             else:
                                 continue
-                            if ptype == "SID" or str(name).upper().startswith("S-"):
-                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                            sid_candidate = (pc_vals.get("SID") or "").strip()
+                            if ptype == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, sid_candidate or name)
                                 if resolved_name:
                                     name = resolved_name
                                     if resolved_type:
                                         ptype = resolved_type
+                            if _skip_noise_name(name, sid):
+                                continue
+                            key = (name.lower(), ptype, group_name)
+                            if key in seen_members:
+                                continue
+                            seen_members.add(key)
+                            members.append({"name": name, "type": ptype, "source_group": group_name})
+
+                        # 3b) SID-based GroupUser query fallback (works when Domain/Name addressing misses localized entries)
+                        try:
+                            sid_like = sid.replace('"', '\"')
+                            sid_wql = 'SELECT * FROM Win32_GroupUser WHERE GroupComponent LIKE "%%SID=\"%s\"%%"' % sid_like
+                            sid_rels = c.query(sid_wql)
+                        except Exception:
+                            sid_rels = []
+
+                        for rel in sid_rels:
+                            pc = getattr(rel, "PartComponent", "")
+                            pc_vals = _kv_from_component(pc)
+                            name = _compose_account_name(pc_vals, fallback=pc)
+                            if not name:
+                                continue
+                            pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
+                            if "Win32_Group" in pclass:
+                                ptype = "Group"
+                            elif "Win32_UserAccount" in pclass:
+                                ptype = "User"
+                            elif "Win32_SystemAccount" in pclass:
+                                ptype = "WellKnownGroup"
+                            elif "Win32_SID" in pclass:
+                                ptype = "SID"
+                            else:
+                                continue
+
+                            sid_candidate = (pc_vals.get("SID") or "").strip()
+                            if ptype == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, sid_candidate or name)
+                                if resolved_name:
+                                    name = resolved_name
+                                    if resolved_type:
+                                        ptype = resolved_type
+
                             if _skip_noise_name(name, sid):
                                 continue
                             key = (name.lower(), ptype, group_name)
@@ -1358,8 +1403,9 @@ $res | ConvertTo-Json -Compress
 
                             vals = _kv_from_component(p)
                             name = _compose_account_name(vals, fallback=_safe_member_name(a))
-                            if typ == "SID" or str(name).upper().startswith("S-"):
-                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                            sid_candidate = (vals.get("SID") or "").strip()
+                            if typ == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, sid_candidate or name)
                                 if resolved_name:
                                     name = resolved_name
                                     if resolved_type:
