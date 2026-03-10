@@ -780,6 +780,38 @@ $res | ConvertTo-Json -Compress
             return (None, "; ".join(errors))
         return (None, "No data returned")
 
+    def _make_wmi_connection(self, computer, wmi_user, password, domain="", netbios=""):
+        attempts = [
+            {"computer": computer, "user": wmi_user, "password": password},
+            {"computer": computer, "user": wmi_user, "password": password, "namespace": r"root\cimv2", "find_classes": False},
+        ]
+
+        # Some environments require explicit authority for remote WMI/DCOM.
+        dom = (netbios or domain or "").strip()
+        if dom and "@" not in wmi_user:
+            attempts.append({
+                "computer": computer,
+                "user": wmi_user,
+                "password": password,
+                "namespace": r"root\cimv2",
+                "find_classes": False,
+                "authority": "ntlmdomain:" + dom,
+            })
+
+        last_err = None
+        for kwargs in attempts:
+            try:
+                return wmi_module.WMI(**kwargs), None
+            except TypeError as e:
+                # Different pywin32/wmi versions support different kwargs.
+                last_err = e
+                continue
+            except Exception as e:
+                last_err = e
+                continue
+
+        return None, last_err
+
     def _is_wmi_access_denied(self, err):
         txt = str(err).lower()
         return (
@@ -848,12 +880,17 @@ $res | ConvertTo-Json -Compress
                 return vals
 
             for wmi_user in ordered_candidates:
-                try:
-                    c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
-                except Exception as e:
-                    last_err = e
+                c, conn_err = self._make_wmi_connection(
+                    computer=computer,
+                    wmi_user=wmi_user,
+                    password=cfg["password"],
+                    domain=domain,
+                    netbios=netbios,
+                )
+                if c is None:
+                    last_err = conn_err
                     # Fast fail on explicit permission errors to avoid long retries.
-                    if self._is_wmi_access_denied(e):
+                    if self._is_wmi_access_denied(conn_err):
                         return (None, "WMI access denied for user " + wmi_user)
                     continue
 
