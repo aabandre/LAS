@@ -217,6 +217,32 @@ def calc_risk_score(members, allowed_admins=None):
     return {"score": score, "severity": severity, "reasons": reasons}
 
 
+def _build_machine_memberships(members):
+    grouped = defaultdict(list)
+    for m in members or []:
+        name = (m.get("name") or "").strip()
+        if not name:
+            continue
+        source_group = (m.get("source_group") or "").strip() or "(unknown local group)"
+        grouped[source_group].append({
+            "account": name,
+            "type": m.get("type", "unknown"),
+            "is_builtin": bool(m.get("is_builtin", False)),
+            "via_group": m.get("via_group", ""),
+        })
+
+    result = {}
+    for group_name, items in grouped.items():
+        uniq = {}
+        for item in items:
+            key = (item["account"].lower(), item.get("via_group", "").lower(), item.get("type", ""))
+            if key not in uniq:
+                uniq[key] = item
+        sorted_items = sorted(uniq.values(), key=lambda x: (x["account"].lower(), x.get("via_group", "").lower()))
+        result[group_name] = sorted_items
+    return result
+
+
 # ═══════════════════════════════════════
 #  SCANNER
 # ═══════════════════════════════════════
@@ -649,6 +675,10 @@ class Scanner:
             elif is_group:
                 # Некоторые WMI-методы возвращают доменные группы без префикса DOMAIN\\.
                 is_domainish = True
+            elif obj_type.lower() == "unknown" and account_name:
+                # Иногда доменная группа приходит как unknown и без DOMAIN\.
+                short = account_name.split("\\", 1)[-1].lower()
+                is_domainish = short not in BUILTIN_ADMINS
 
             if is_domainish and account_name and obj_type.lower() not in ("computer", "wellknowngroup"):
                 try:
@@ -1619,6 +1649,7 @@ $res | ConvertTo-Json -Compress
         risky_machines = []
         risky_details = {}
         machine_risks = {}
+        machine_memberships = {}
         scan_times = []
         success_count = 0
         error_count = 0
@@ -1644,6 +1675,14 @@ $res | ConvertTo-Json -Compress
 
             if res.get("error"):
                 error_count += 1
+                machine_memberships[res["computer"]] = {
+                    "os": res.get("os", ""),
+                    "method": res.get("method", ""),
+                    "scan_time_sec": res.get("scan_time_sec", 0),
+                    "ports": res.get("ports", {}),
+                    "error": res.get("error", ""),
+                    "groups": {},
+                }
                 err = res["error"]
                 if "DNS failed" in err:
                     error_types["DNS failed"] += 1
@@ -1665,6 +1704,14 @@ $res | ConvertTo-Json -Compress
             sev = risk.get("severity", "clean")
             severity_counts[sev] += 1
             machine_risks[res["computer"]] = risk
+            machine_memberships[res["computer"]] = {
+                "os": res.get("os", ""),
+                "method": res.get("method", ""),
+                "scan_time_sec": res.get("scan_time_sec", 0),
+                "ports": res.get("ports", {}),
+                "error": "",
+                "groups": _build_machine_memberships(res.get("members", [])),
+            }
 
             has_nonbuiltin = False
             nonbuiltin_names = []
@@ -1767,6 +1814,7 @@ $res | ConvertTo-Json -Compress
             "risky_machines": sorted(risky_machines),
             "risky_details": risky_details,
             "machine_risks": machine_risks,
+            "machine_memberships": machine_memberships,
             "metrics": metrics.get_stats(),
         }
     def stop(self):
@@ -1822,6 +1870,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
     risky_machines = []
     risky_details = {}
     machine_risks = {}
+    machine_memberships = {}
     scan_times = []
     success_count = 0
     error_count = 0
@@ -1847,6 +1896,14 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
         if res.get("error"):
             error_count += 1
+            machine_memberships[res["computer"]] = {
+                "os": res.get("os", ""),
+                "method": res.get("method", ""),
+                "scan_time_sec": res.get("scan_time_sec", 0),
+                "ports": res.get("ports", {}),
+                "error": res.get("error", ""),
+                "groups": {},
+            }
             err = res["error"]
             if "DNS failed" in err:
                 error_types["DNS failed"] += 1
@@ -1868,6 +1925,14 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
         sev = risk.get("severity", "clean")
         severity_counts[sev] += 1
         machine_risks[res["computer"]] = risk
+        machine_memberships[res["computer"]] = {
+            "os": res.get("os", ""),
+            "method": res.get("method", ""),
+            "scan_time_sec": res.get("scan_time_sec", 0),
+            "ports": res.get("ports", {}),
+            "error": "",
+            "groups": _build_machine_memberships(res.get("members", [])),
+        }
 
         has_nonbuiltin = False
         nonbuiltin_names = []
@@ -1964,6 +2029,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
         "risky_machines": sorted(risky_machines),
         "risky_details": risky_details,
         "machine_risks": machine_risks,
+        "machine_memberships": machine_memberships,
         "metrics": summary_data.get("metrics", {}),
     }
 
