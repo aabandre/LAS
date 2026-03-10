@@ -64,6 +64,13 @@
         .tag-low{background:#f1c40f;color:#333}
         .machines-cell{font-size:9px;color:#666;max-width:300px;max-height:50px;overflow-y:auto;word-break:break-all}
         .via-cell{font-size:9px;color:#9b59b6;max-width:150px;word-break:break-all}
+        .machine-filter{margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+        .machine-filter select,.machine-filter input{padding:4px 8px;font-size:12px;border:1px solid #ccc;border-radius:3px}
+        .machine-detail{margin-top:10px;border:1px solid #e1e7f0;border-radius:4px;background:#fafcff;padding:10px}
+        .machine-detail h4{margin:0 0 8px;font-size:13px}
+        .machine-group-block{margin:8px 0}
+        .machine-group-block b{color:#2d5f9f}
+        .machine-members{font-size:11px;color:#444;padding-left:14px}
         .risky-grid{overflow:hidden}
         .risky-item{float:left;width:25%;padding:3px}
         .risky-card{background:#fff3e0;border:1px solid #ffcc02;border-radius:4px;padding:8px;font-size:11px}
@@ -129,6 +136,11 @@
             <div class="tbl-wrap">
                 <h3><span data-i18n="adm_title">All Admin Accounts</span> &mdash; <span data-i18n="adm_showing">Showing</span> <span id="adminShowing">0</span> <span data-i18n="adm_of">of</span> <span id="adminTotal">0</span></h3>
                 <div class="search-box"><input type="text" id="adminSearch" data-i18n-placeholder="adm_search" placeholder="Search..." onkeyup="filterAdmins()"></div>
+                <div class="machine-filter">
+                    <label for="machineFilter" data-i18n="machine_filter">Machine:</label>
+                    <select id="machineFilter" onchange="filterAdmins();renderMachineDetails()"><option value="" data-i18n="machine_all">All machines</option></select>
+                    <input type="text" id="machineQuickSearch" data-i18n-placeholder="machine_quick_search" placeholder="Find machine..." onkeyup="filterMachineOptions()">
+                </div>
                 <div class="filter-options">
                     <label><input type="checkbox" id="hideLocalAdmin" onchange="filterAdmins()"> <span data-i18n="adm_hide_admin">Hide Administrator</span></label>
                     <label><input type="checkbox" id="hideAllBuiltin" onchange="filterAdmins()"> <span data-i18n="adm_hide_builtin">Hide ALL built-in</span></label>
@@ -147,6 +159,7 @@
                     </tr></thead>
                     <tbody id="adminBody"></tbody>
                 </table>
+                <div class="machine-detail" id="machineDetailBox"></div>
             </div>
         </div>
 
@@ -206,6 +219,8 @@ en:{
     adm_title:"All Admin Accounts",adm_showing:"Showing",adm_of:"of",adm_search:"Search accounts...",
     adm_hide_admin:"Hide Administrator",adm_hide_builtin:"Hide ALL built-in",adm_only_custom:"Only custom",
     adm_only_via:"Only via group",adm_hide_groups:"Hide groups",
+    machine_filter:"Machine:",machine_all:"All machines",machine_quick_search:"Find machine...",machine_detail_empty:"Select a machine to view detailed memberships",
+    machine_detail_error:"Machine scan error",machine_detail_groups:"Local groups and resolved memberships",
     col_account:"Account",col_type:"Type",col_count:"Count",col_via:"Via Group",col_machines:"Machines",
     col_file:"File",col_size:"Size",col_date:"Date",col_action:"Action",
     risk_title:"Risky Machines",clean_title:"Clean Machines",heat_title:"Admin Heatmap",
@@ -234,6 +249,8 @@ ru:{
     adm_only_custom:"\u0422\u043e\u043b\u044c\u043a\u043e \u043d\u0435\u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u044b\u0435",
     adm_only_via:"\u0422\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043f\u043f\u0443",
     adm_hide_groups:"\u0421\u043a\u0440\u044b\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u044b",
+    machine_filter:"\u041c\u0430\u0448\u0438\u043d\u0430:",machine_all:"\u0412\u0441\u0435 \u043c\u0430\u0448\u0438\u043d\u044b",machine_quick_search:"\u041d\u0430\u0439\u0442\u0438 \u043c\u0430\u0448\u0438\u043d\u0443...",machine_detail_empty:"\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043c\u0430\u0448\u0438\u043d\u0443 \u0434\u043b\u044f \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u043e\u0433\u043e \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430",
+    machine_detail_error:"\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043a\u0430\u043d\u0430 \u043c\u0430\u0448\u0438\u043d\u044b",machine_detail_groups:"\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0438 \u0438\u0445 \u0441\u043e\u0441\u0442\u0430\u0432",
     col_account:"\u0423\u0447\u0451\u0442\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c",
     col_type:"\u0422\u0438\u043f",col_count:"\u041a\u043e\u043b-\u0432\u043e",
     col_via:"\u0427\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043f\u043f\u0443",
@@ -311,7 +328,7 @@ function renderAll(){if(!SD)return;buildTabs();applyLang();renderCards();
     drawPie("cResults","lResults",{"Success":SD.success||0,"Errors":SD.errors||0},["#5cb85c","#d9534f"]);
     drawPie("cMethods","lMethods",SD.method_breakdown||{},COLORS);drawPie("cErrors","lErrors",SD.error_breakdown||{},COLORS.slice(2));
     drawPie("cOS","lOS",SD.os_breakdown||{},COLORS.slice(4));drawPie("cPorts","lPorts",SD.port_statistics||{},COLORS);
-    renderAdmins();renderRisky();renderClean();renderHeatmap()}
+    renderAdmins();renderMachineFilter();renderMachineDetails();renderRisky();renderClean();renderHeatmap()}
 
 function renderCards(){var d=SD,sb=d.severity_breakdown||{};
     var items=[{v:d.total_scanned||0,l:"card_total",c:"c-blue"},{v:d.success||0,l:"card_success",c:"c-green"},{v:d.errors||0,l:"card_errors",c:"c-red"},
@@ -334,18 +351,67 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=aType.indexOf("Group")>-1||aType.indexOf("nested")>-1;
         var tagT,tagC;if(isLAd){tagT="local-admin";tagC="tag-local-admin"}else if(isGrp){tagT="group";tagC="tag-nested"}else if(isBI){tagT="builtin";tagC="tag-builtin"}else{tagT="custom";tagC="tag-risk"}
         var tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",mList=(a.machines||[]).join(", ");
-        html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\">"
+        html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\">"
             +"<td>"+(i+1)+"</td><td>"+a.account+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
             +"<td class=\"via-cell\">"+via+"</td><td><div class=\"machines-cell\">"+mList+"</div></td></tr>"}
     $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;filterAdmins()}
 
-function filterAdmins(){var st=val("adminSearch").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false;
+function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false;
     var rows=$("adminBody").getElementsByTagName("tr"),vis=0;
     for(var i=0;i<rows.length;i++){var row=rows[i],sd=row.getAttribute("data-search")||"",ila=row.getAttribute("data-is-la")==="1",ibi=row.getAttribute("data-is-bi")==="1",icu=row.getAttribute("data-is-custom")==="1",hv=row.getAttribute("data-has-via")==="1",ig=row.getAttribute("data-is-group")==="1";
-        var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;
+        var mds=row.getAttribute("data-machines")||"";
+        var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&mf&&mds.indexOf(mf)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;
         row.style.display=show?"":"none";if(show)vis++}$("adminShowing").innerHTML=vis}
 
+
+function renderMachineFilter(){
+    var sel=$("machineFilter");if(!sel)return;
+    var current=sel.value||"";
+    var mm=SD.machine_memberships||{},keys=[],k;
+    for(k in mm){if(mm.hasOwnProperty(k))keys.push(k)}
+    keys.sort();
+    var h='<option value="">'+t("machine_all")+'</option>';
+    for(var i=0;i<keys.length;i++)h+='<option value="'+keys[i]+'">'+keys[i]+'</option>';
+    sel.innerHTML=h;
+    if(current){sel.value=current}
+}
+
+function filterMachineOptions(){
+    var q=val("machineQuickSearch").toLowerCase(),sel=$("machineFilter");if(!sel)return;
+    for(var i=0;i<sel.options.length;i++){
+        var o=sel.options[i],isAll=o.value==="";
+        if(isAll){o.style.display="";continue}
+        o.style.display=(o.value.toLowerCase().indexOf(q)>-1)?"":"none";
+    }
+}
+
+function renderMachineDetails(){
+    var box=$("machineDetailBox");if(!box)return;
+    var machine=val("machineFilter");
+    if(!machine){box.innerHTML='<div style="color:#777">'+t("machine_detail_empty")+'</div>';return}
+    var mm=SD.machine_memberships||{},md=mm[machine];
+    if(!md){box.innerHTML='<div style="color:#777">'+t("no_data")+'</div>';return}
+    var h='<h4>'+machine+'</h4>';
+    h+='<div><b>OS:</b> '+(md.os||'-')+' | <b>Method:</b> '+(md.method||'-')+' | <b>Time:</b> '+(md.scan_time_sec||0)+'s</div>';
+    if(md.error){h+='<div style="margin-top:6px;color:#c0392b"><b>'+t("machine_detail_error")+':</b> '+md.error+'</div>';box.innerHTML=h;return}
+    h+='<div style="margin-top:6px"><b>'+t("machine_detail_groups")+':</b></div>';
+    var groups=md.groups||{},gk=[],k;
+    for(k in groups){if(groups.hasOwnProperty(k))gk.push(k)}
+    gk.sort();
+    if(!gk.length){h+='<div class="machine-members">'+t("no_data")+'</div>';box.innerHTML=h;return}
+    for(var i=0;i<gk.length;i++){
+        var g=gk[i],items=groups[g]||[];
+        h+='<div class="machine-group-block"><b>'+g+'</b><div class="machine-members">';
+        for(var j=0;j<items.length;j++){
+            var it=items[j],line=it.account||'';
+            if(it.via_group)line+=' (via '+it.via_group+')';
+            h+='&bull; '+line+' ['+(it.type||'unknown')+']<br>';
+        }
+        h+='</div></div>';
+    }
+    box.innerHTML=h;
+}
 function renderRisky(){var machines=SD.risky_machines||[],details=SD.risky_details||{},risks=SD.machine_risks||{};$("riskyCount").innerHTML=machines.length;
     if(!machines.length){$("riskyGrid").innerHTML="<div style=\"padding:20px;color:#5cb85c;font-weight:bold\">"+t("all_clean")+"</div>";return}
     var h="";for(var i=0;i<machines.length;i++){var m=machines[i],mb=details[m]||[],rk=risks[m]||{},sev=rk.severity||"unknown",sc=rk.score||0;
