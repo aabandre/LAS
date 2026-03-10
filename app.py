@@ -441,8 +441,10 @@ class Scanner:
                 account_name = name.split("@")[0]
                 domain_hint = name.split("@", 1)[1]
 
-            # Если тип Group и доменная — разворачиваем
+            # Если получили имя группы без DOMAIN\prefix, всё равно пробуем LDAP/GC.
             is_group = obj_type.lower() in ("group", "группа")
+            if (not is_domain) and is_group and "\\" not in name and "@" not in name:
+                is_domain = True
 
             # Если тип unknown но доменная — проверяем через LDAP
             if is_domain and (is_group or obj_type.lower() == "unknown"):
@@ -926,6 +928,14 @@ $res | ConvertTo-Json -Compress
                 name_v = str(getattr(obj, "Name", "") or "").strip()
                 if domain_v and name_v:
                     return domain_v + "\\" + name_v
+
+                ref_domain = str(getattr(obj, "ReferencedDomainName", "") or "").strip()
+                account_name = str(getattr(obj, "AccountName", "") or "").strip()
+                if ref_domain and account_name:
+                    return ref_domain + "\\" + account_name
+                if account_name:
+                    return account_name
+
                 caption_v = str(getattr(obj, "Caption", "") or "").strip()
                 if caption_v:
                     return caption_v
@@ -968,6 +978,14 @@ $res | ConvertTo-Json -Compress
                 name_v = (vals.get("Name") or "").strip()
                 if domain_v and name_v:
                     return domain_v + "\\" + name_v
+
+                ref_domain = (vals.get("ReferencedDomainName") or "").strip()
+                account_name = (vals.get("AccountName") or "").strip()
+                if ref_domain and account_name:
+                    return ref_domain + "\\" + account_name
+                if account_name:
+                    return account_name
+
                 caption_v = (vals.get("Caption") or "").strip()
                 if caption_v:
                     return caption_v
