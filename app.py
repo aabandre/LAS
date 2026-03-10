@@ -34,6 +34,13 @@ try:
 except ImportError:
     pass
 
+WIN32NET_AVAILABLE = False
+try:
+    import win32net
+    WIN32NET_AVAILABLE = True
+except ImportError:
+    pass
+
 logger = logging.getLogger("scanner")
 logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
@@ -1179,6 +1186,36 @@ $res | ConvertTo-Json -Compress
                 sid_cache[sid_text] = (resolved_name, resolved_type)
                 return sid_cache[sid_text]
 
+            def _collect_via_netlocalgroup(remote_host, local_group_name, source_group_label):
+                if not WIN32NET_AVAILABLE:
+                    return []
+                result = []
+                try:
+                    server = "\\" + str(remote_host).split(".")[0]
+                    resume = 0
+                    while True:
+                        data, total, resume = win32net.NetLocalGroupGetMembers(server, local_group_name, 2, resume, 4096)
+                        for item in data:
+                            domain_and_name = str(item.get("domainandname") or "").strip()
+                            if not domain_and_name:
+                                continue
+                            sid_v = str(item.get("sid") or "").strip()
+                            if _skip_noise_name(domain_and_name, sid_v):
+                                continue
+                            sid_usage = int(item.get("sidusage", 0) or 0)
+                            if sid_usage in (2, 4, 5):
+                                typ = "Group"
+                            elif sid_usage in (1, 6, 7):
+                                typ = "User"
+                            else:
+                                typ = "Account"
+                            result.append({"name": domain_and_name, "type": typ, "source_group": source_group_label})
+                        if not resume:
+                            break
+                except Exception as e:
+                    logger.debug("NetLocalGroupGetMembers failed for %s/%s: %s", remote_host, local_group_name, e)
+                return result
+
             for wmi_user in ordered_candidates:
                 c, conn_err = self._make_wmi_connection(
                     computer=computer,
@@ -1418,6 +1455,25 @@ $res | ConvertTo-Json -Compress
                                 continue
                             seen_members.add(key)
                             members.append({"name": name, "type": typ, "source_group": group_name})
+
+                if WIN32NET_AVAILABLE:
+                    for target_group in local_groups:
+                        sid = target_group["sid"]
+                        group_name = target_group["name"]
+                        groups = []
+                        try:
+                            groups = c.Win32_Group(SID=sid)
+                        except Exception:
+                            groups = []
+                        for group in groups:
+                            resolved_group_name = str(getattr(group, "Name", "") or group_name).strip() or group_name
+                            net_items = _collect_via_netlocalgroup(computer, resolved_group_name, group_name)
+                            for ni in net_items:
+                                key = (ni["name"].lower(), ni["type"], ni["source_group"])
+                                if key in seen_members:
+                                    continue
+                                seen_members.add(key)
+                                members.append(ni)
 
                 if members:
                     suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
