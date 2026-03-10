@@ -96,6 +96,14 @@
         <div class="form-row"><label data-i18n="lbl_ou_srv">Servers OU:</label><input type="text" id="cfgOuSrv"></div>
         <div class="form-row"><label data-i18n="lbl_timeout">Host Timeout (sec):</label><input type="number" id="cfgTimeout" value="40"></div>
         <div class="form-row"><label data-i18n="lbl_allowed">Allowed Admins (one per line):</label><textarea id="cfgAllowed" placeholder="DOMAIN\Admin1&#10;DOMAIN\HelpDesk"></textarea></div>
+        <div class="form-row"><label data-i18n="lbl_aliases">Additional domain aliases (one per line):</label><textarea id="cfgDomainAliases" placeholder="OTHERDOMAIN&#10;LEGACY"></textarea></div>
+        <div class="form-row-inline">
+            <span data-i18n="lbl_groups">Local groups to scan:</span>
+            <label style="margin-left:10px"><input type="checkbox" id="grpAdministrators" checked> <span data-i18n="grp_admin">Administrators</span></label>
+            <label style="margin-left:10px"><input type="checkbox" id="grpRdp"> <span data-i18n="grp_rdp">Remote Desktop Users</span></label>
+            <label style="margin-left:10px"><input type="checkbox" id="grpDcom"> <span data-i18n="grp_dcom">Distributed COM Users</span></label>
+            <label style="margin-left:10px"><input type="checkbox" id="grpWinRm"> <span data-i18n="grp_winrm">Remote Management Users</span></label>
+        </div>
         <div class="form-row-inline">
             <label><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
         </div>
@@ -154,6 +162,12 @@ var LANG = {
         lbl_ou_srv: "Servers OU:",
         lbl_timeout: "Host Timeout (sec):",
         lbl_allowed: "Allowed Admins (one per line):",
+        lbl_aliases: "Additional domain aliases (one per line):",
+        lbl_groups: "Local groups to scan:",
+        grp_admin: "Administrators",
+        grp_rdp: "Remote Desktop Users",
+        grp_dcom: "Distributed COM Users",
+        grp_winrm: "Remote Management Users",
         lbl_expand: "Expand domain groups via LDAP",
         progress_title: "Progress",
         st_scanned: "Scanned",
@@ -315,7 +329,14 @@ function saveSettings(){
             server:val("cfgServer"),domain:val("cfgDomain"),netbios:val("cfgNetbios"),
             user:val("cfgUser"),ouWork:val("cfgOuWork"),ouSrv:val("cfgOuSrv"),
             threads:val("cfgThreads"),timeout:val("cfgTimeout"),
-            allowed:val("cfgAllowed"),expand:$("cfgExpand").checked
+            allowed:val("cfgAllowed"),domainAliases:val("cfgDomainAliases"),
+            groups:{
+                administrators:$("grpAdministrators").checked,
+                remoteDesktopUsers:$("grpRdp").checked,
+                distributedComUsers:$("grpDcom").checked,
+                remoteManagementUsers:$("grpWinRm").checked
+            },
+            expand:$("cfgExpand").checked
         };
         localStorage.setItem("scannerSettings",JSON.stringify(data));
         alert(t("settings_saved"))
@@ -341,6 +362,13 @@ function applySettings(d){
     if(d.threads) $("cfgThreads").value=d.threads;
     if(d.timeout) $("cfgTimeout").value=d.timeout;
     if(d.allowed) $("cfgAllowed").value=d.allowed;
+    if(d.domainAliases) $("cfgDomainAliases").value=d.domainAliases;
+    if(d.groups){
+        if(d.groups.hasOwnProperty("administrators")) $("grpAdministrators").checked=!!d.groups.administrators;
+        if(d.groups.hasOwnProperty("remoteDesktopUsers")) $("grpRdp").checked=!!d.groups.remoteDesktopUsers;
+        if(d.groups.hasOwnProperty("distributedComUsers")) $("grpDcom").checked=!!d.groups.distributedComUsers;
+        if(d.groups.hasOwnProperty("remoteManagementUsers")) $("grpWinRm").checked=!!d.groups.remoteManagementUsers;
+    }
     if(d.hasOwnProperty("expand")) $("cfgExpand").checked=d.expand
 }
 
@@ -351,6 +379,7 @@ try{
 
 function doStart(){
     var allowedRaw = val("cfgAllowed"), allowed = [];
+    var aliasesRaw = val("cfgDomainAliases"), domainAliases = [];
     if(allowedRaw){
         var lines = allowedRaw.split("\n");
         for(var i=0;i<lines.length;i++){
@@ -358,12 +387,29 @@ function doStart(){
             if(line) allowed.push(line)
         }
     }
+    if(aliasesRaw){
+        var aliasLines = aliasesRaw.split("\n");
+        for(var k=0;k<aliasLines.length;k++){
+            var alias=aliasLines[k].replace(/^\s+|\s+$/g,"");
+            if(alias) domainAliases.push(alias)
+        }
+    }
+
+    var groupTargets = [];
+    if($("grpAdministrators").checked) groupTargets.push("S-1-5-32-544");
+    if($("grpRdp").checked) groupTargets.push("S-1-5-32-555");
+    if($("grpDcom").checked) groupTargets.push("S-1-5-32-562");
+    if($("grpWinRm").checked) groupTargets.push("S-1-5-32-580");
+    if(!groupTargets.length) groupTargets.push("S-1-5-32-544");
+
     var config={scan:{
         ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:val("cfgUser"),password:val("cfgPass")},
         workstations_ou:val("cfgOuWork"),servers_ou:val("cfgOuSrv"),
         max_threads:parseInt(val("cfgThreads"),10)||20,
         host_timeout:parseInt(val("cfgTimeout"),10)||40,
         allowed_admins:allowed,
+        domain_aliases:domainAliases,
+        group_targets:groupTargets,
         expand_groups:$("cfgExpand").checked
     }};
     if(!config.scan.ad_config.server||!config.scan.ad_config.username||!config.scan.ad_config.password){
@@ -412,6 +458,7 @@ function pollAll(){
                     var names=[],allB=true,j;
                     for(j=0;j<d.members.length;j++){
                         var m=d.members[j],tag=m.name;
+                        if(m.source_group)tag+=" ["+m.source_group+"]";
                         if(m.via_group)tag+=" (\u0447\u0435\u0440\u0435\u0437 "+m.via_group+")";
                         if(m.is_builtin){tag+=" [B]"}else{allB=false}
                         names.push(tag)
