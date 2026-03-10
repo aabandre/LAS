@@ -1140,6 +1140,45 @@ $res | ConvertTo-Json -Compress
                     return sid_v
                 return str(fallback or "").strip()
 
+            sid_cache = {}
+
+            def _resolve_sid_identity(conn, sid_value):
+                sid_text = str(sid_value or "").strip()
+                if not sid_text or not sid_text.upper().startswith("S-"):
+                    return ("", "")
+                if sid_text in sid_cache:
+                    return sid_cache[sid_text]
+
+                resolved_name = ""
+                resolved_type = ""
+                try:
+                    sid_objs = conn.Win32_SID(SID=sid_text)
+                except Exception:
+                    sid_objs = []
+
+                for sid_obj in sid_objs:
+                    try:
+                        assoc = sid_obj.associators(wmi_result_class="Win32_Account")
+                    except Exception:
+                        assoc = []
+                    for acc in assoc:
+                        acc_name = _compose_member_name(acc, fallback="")
+                        if acc_name:
+                            resolved_name = acc_name
+                            pth = str(getattr(acc, "Path_", ""))
+                            if "Win32_Group" in pth:
+                                resolved_type = "Group"
+                            elif "Win32_UserAccount" in pth:
+                                resolved_type = "User"
+                            else:
+                                resolved_type = "Account"
+                            break
+                    if resolved_name:
+                        break
+
+                sid_cache[sid_text] = (resolved_name, resolved_type)
+                return sid_cache[sid_text]
+
             for wmi_user in ordered_candidates:
                 c, conn_err = self._make_wmi_connection(
                     computer=computer,
@@ -1189,13 +1228,20 @@ $res | ConvertTo-Json -Compress
                                 assoc_items = []
                             for a in assoc_items:
                                 name = _compose_member_name(a, fallback=_safe_member_name(a))
+                                member_type = rtype
+                                if member_type == "SID" or str(name).upper().startswith("S-"):
+                                    resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                    if resolved_name:
+                                        name = resolved_name
+                                        if resolved_type:
+                                            member_type = resolved_type
                                 if _skip_noise_name(name, sid):
                                     continue
-                                key = (name.lower(), rtype, group_name)
+                                key = (name.lower(), member_type, group_name)
                                 if key in seen_members:
                                     continue
                                 seen_members.add(key)
-                                members.append({"name": name, "type": rtype, "source_group": group_name})
+                                members.append({"name": name, "type": member_type, "source_group": group_name})
 
                         # 2) Raw association fallback
                         try:
@@ -1220,6 +1266,12 @@ $res | ConvertTo-Json -Compress
                             else:
                                 # Skip non-account objects to avoid noise (e.g. logical disks).
                                 continue
+                            if typ == "SID" or str(name).upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                if resolved_name:
+                                    name = resolved_name
+                                    if resolved_type:
+                                        typ = resolved_type
                             if _skip_noise_name(name, sid):
                                 continue
                             key = (name.lower(), typ, group_name)
@@ -1257,6 +1309,12 @@ $res | ConvertTo-Json -Compress
                                 ptype = "SID"
                             else:
                                 continue
+                            if ptype == "SID" or str(name).upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                if resolved_name:
+                                    name = resolved_name
+                                    if resolved_type:
+                                        ptype = resolved_type
                             if _skip_noise_name(name, sid):
                                 continue
                             key = (name.lower(), ptype, group_name)
@@ -1300,6 +1358,12 @@ $res | ConvertTo-Json -Compress
 
                             vals = _kv_from_component(p)
                             name = _compose_account_name(vals, fallback=_safe_member_name(a))
+                            if typ == "SID" or str(name).upper().startswith("S-"):
+                                resolved_name, resolved_type = _resolve_sid_identity(c, name)
+                                if resolved_name:
+                                    name = resolved_name
+                                    if resolved_type:
+                                        typ = resolved_type
                             if _skip_noise_name(name, sid):
                                 continue
 
