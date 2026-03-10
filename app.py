@@ -53,6 +53,13 @@ BUILTIN_ADMINS = {
     "schema admins", "администраторы схемы",
 }
 
+LOCAL_GROUP_PRESETS = {
+    "S-1-5-32-544": {"key": "administrators", "name": "Administrators"},
+    "S-1-5-32-555": {"key": "remote_desktop_users", "name": "Remote Desktop Users"},
+    "S-1-5-32-562": {"key": "distributed_com_users", "name": "Distributed COM Users"},
+    "S-1-5-32-580": {"key": "remote_management_users", "name": "Remote Management Users"},
+}
+
 app = FastAPI()
 
 if getattr(sys, "frozen", False):
@@ -596,7 +603,7 @@ class Scanner:
                 name = str(item)
                 obj_type = "unknown"
             name = name.strip()
-            if name and "command completed" not in name.lower():
+            if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
                 names.append({"name": name, "type": obj_type})
         return names
 
@@ -613,13 +620,83 @@ class Scanner:
             result["via_group"] = via_group
         return result
 
+    def _normalize_group_targets(self):
+        selected = self.config.get("group_targets")
+        if not selected:
+            return ["S-1-5-32-544"]
+
+        normalized = []
+        for sid in selected:
+            sid_str = str(sid).strip()
+            if sid_str in LOCAL_GROUP_PRESETS:
+                normalized.append(sid_str)
+
+        if not normalized:
+            return ["S-1-5-32-544"]
+        return normalized
+
+    def _get_local_groups(self):
+        groups = []
+        for sid in self._normalize_group_targets():
+            preset = LOCAL_GROUP_PRESETS.get(sid)
+            if preset:
+                groups.append({
+                    "sid": sid,
+                    "key": preset["key"],
+                    "name": preset["name"],
+                })
+        return groups
+
+    def _expand_with_domain_aliases(self, members, aliases):
+        if not aliases:
+            return members
+
+        alias_set = set()
+        for alias in aliases:
+            a = str(alias).strip().lower()
+            if a:
+                alias_set.add(a)
+
+        if not alias_set:
+            return members
+
+        expanded = []
+        for m in members:
+            expanded.append(m)
+            name = (m.get("name") or "").strip()
+            obj_type = m.get("type") or "unknown"
+            if "\\" not in name:
+                continue
+            domain, short = name.split("\\", 1)
+            if not short:
+                continue
+            domain_lower = domain.strip().lower()
+            if domain_lower in alias_set:
+                for alias in sorted(alias_set):
+                    if alias == domain_lower:
+                        continue
+                    alt_name = alias.upper() + "\\" + short
+                    expanded.append({"name": alt_name, "type": obj_type})
+        return expanded
+
     def _try_winrm_methods(self, computer, use_ssl=False):
         session = self._make_session(computer, use_ssl=use_ssl)
-        last_error = None
+        selected_groups = self._get_local_groups()
+        all_members = []
+        method_labels = []
+        errors = []
 
-        try:
-            script = r"""
-$group = [ADSI]"WinNT://./S-1-5-32-544,group"
+        for group in selected_groups:
+            sid = group["sid"]
+            group_name = group["name"]
+            group_members = None
+            group_method = None
+            last_error = None
+
+            try:
+                script = r"""
+$targetSid = "__GROUP_SID__"
+$group = [ADSI]("WinNT://./" + $targetSid + ",group")
 $result = @()
 foreach ($member in $group.psbase.Invoke("Members")) {
     $cls  = $member.GetType().InvokeMember("Class",  'GetProperty', $null, $member, $null)
@@ -628,97 +705,94 @@ foreach ($member in $group.psbase.Invoke("Members")) {
     $domain = ""
     if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
     if ($domain -and $domain -ne $env:COMPUTERNAME) {
-        $fullname = $domain + "\" + $name
+        # Keep a single backslash in DOMAIN\user for downstream parsing.
+        $fullname = "{0}\{1}" -f $domain, $name
     } else {
         $fullname = $name
     }
     $result += @{ Name = $fullname; Type = $cls }
 }
 $result | ConvertTo-Json -Compress -Depth 3
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-ADSI", members)
-        except Exception as e:
-            last_error = e
+""".replace("__GROUP_SID__", sid)
+                raw = self._run_ps(session, script, computer)
+                members = self._extract_names(raw)
+                if members:
+                    group_method = "WinRM-ADSI"
+                    group_members = members
+            except Exception as e:
+                last_error = e
 
-        try:
-            script = r"""
-$sid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
-$group = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+            if group_members is None:
+                try:
+                    script = r"""
+$targetSid = "__GROUP_SID__"
+$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
+$group = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
 Get-LocalGroupMember -Group $group |
     Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}} |
     ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-GLGM", members)
-        except Exception as e:
-            last_error = e
+""".replace("__GROUP_SID__", sid)
+                    raw = self._run_ps(session, script, computer)
+                    members = self._extract_names(raw)
+                    if members:
+                        group_method = "WinRM-GLGM"
+                        group_members = members
+                except Exception as e:
+                    last_error = e
 
-        try:
-            script = r"""
-$sid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
-$groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+            if group_members is None:
+                try:
+                    script = r"""
+$targetSid = "__GROUP_SID__"
+$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
+$groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
 $raw = net localgroup $groupName 2>&1
 $started = $false; $res = @()
 foreach ($line in $raw) {
     $s = "$line".Trim()
-    if ($s -eq '---') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
+    if ($s -match '^-{3,}$') { $started = $true; continue }
+    if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
 }
 $res | ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-NET-SID", members)
-        except Exception as e:
-            last_error = e
+""".replace("__GROUP_SID__", sid)
+                    raw = self._run_ps(session, script, computer)
+                    members = self._extract_names(raw)
+                    if members:
+                        group_method = "WinRM-NET-SID"
+                        group_members = members
+                except Exception as e:
+                    last_error = e
 
-        try:
-            script = r"""
-$raw = net localgroup Administrators 2>&1
-$started = $false; $res = @()
-foreach ($line in $raw) {
-    $s = "$line".Trim()
-    if ($s -eq '---') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
-}
-$res | ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-NET-EN", members)
-        except Exception as e:
-            last_error = e
+            if group_members is None:
+                errors.append(group_name + ": " + str(last_error)[:120])
+                continue
 
-        try:
-            script = u"""
-$raw = net localgroup \u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b 2>&1
-$started = $false; $res = @()
-foreach ($line in $raw) {
-    $s = "$line".Trim()
-    if ($s -eq '---') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed') { $res += $s }
-}
-$res | ConvertTo-Json -Compress
-"""
-            raw = self._run_ps(session, script, computer)
-            members = self._extract_names(raw)
-            if members:
-                return ("WinRM-NET-RU", members)
-        except Exception as e:
-            last_error = e
+            for member in group_members:
+                member["source_group"] = group_name
+            all_members.extend(group_members)
+            method_labels.append(group_method + "[" + group_name + "]")
 
-        return (None, last_error)
+        if all_members:
+            method = ",".join(method_labels) if method_labels else "WinRM"
+            return (method, all_members)
+
+        if errors:
+            return (None, "; ".join(errors))
+        return (None, "No data returned")
+
+    def _is_wmi_access_denied(self, err):
+        txt = str(err).lower()
+        return (
+            "-2147024891" in txt
+            or "access is denied" in txt
+            or "отказано в доступе" in txt
+            or "access denied" in txt
+        )
 
     def _try_wmi(self, computer):
         if not WMI_AVAILABLE:
             return (None, "WMI not installed")
+
         com_init = False
         try:
             if PYTHONCOM_AVAILABLE:
@@ -726,21 +800,176 @@ $res | ConvertTo-Json -Compress
                 com_init = True
         except Exception:
             pass
+
         try:
             cfg = self.config["ad_config"]
-            wmi_user = cfg["netbios_domain"] + "\\" + cfg["username"]
-            c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
-            members = []
-            for group in c.Win32_Group(SID="S-1-5-32-544"):
-                for a in group.associators(wmi_result_class="Win32_UserAccount"):
-                    members.append({"name": a.Caption, "type": "User"})
-                for a in group.associators(wmi_result_class="Win32_Group"):
-                    members.append({"name": a.Caption, "type": "Group"})
-                for a in group.associators(wmi_result_class="Win32_SystemAccount"):
-                    members.append({"name": a.Caption, "type": "WellKnownGroup"})
-            if members:
-                return ("WMI", members)
+            username = (cfg.get("username") or "").strip()
+            domain = (cfg.get("domain") or "").strip()
+            netbios = (cfg.get("netbios_domain") or "").strip()
+
+            # Build credential candidates: helps when one format is denied but another works.
+            candidates = []
+            if "\\" in username or "@" in username:
+                candidates.append(username)
+            else:
+                if netbios:
+                    candidates.append(netbios + "\\" + username)
+                if domain:
+                    candidates.append(username + "@" + domain)
+                candidates.append(username)
+
+            seen_cand = set()
+            ordered_candidates = []
+            for cnd in candidates:
+                key = cnd.lower()
+                if cnd and key not in seen_cand:
+                    seen_cand.add(key)
+                    ordered_candidates.append(cnd)
+
+            local_groups = self._get_local_groups()
+            last_err = None
+
+            def _safe_member_name(obj):
+                return (getattr(obj, "Caption", None) or getattr(obj, "Name", None) or getattr(obj, "SID", None) or "").strip()
+
+            def _kv_from_component(comp):
+                vals = {}
+                if not comp:
+                    return vals
+                tail = str(comp).split(":", 1)[-1]
+                if "." not in tail:
+                    return vals
+                data = tail.split(".", 1)[1]
+                for part in data.split(','):
+                    if "=" not in part:
+                        continue
+                    k, v = part.split("=", 1)
+                    vals[k.strip()] = v.strip().strip('"')
+                return vals
+
+            for wmi_user in ordered_candidates:
+                try:
+                    c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
+                except Exception as e:
+                    last_err = e
+                    # Fast fail on explicit permission errors to avoid long retries.
+                    if self._is_wmi_access_denied(e):
+                        return (None, "WMI access denied for user " + wmi_user)
+                    continue
+
+                members = []
+                seen_members = set()
+                scanned_groups = []
+                short_host = computer.split(".")[0].lower()
+
+                for target_group in local_groups:
+                    sid = target_group["sid"]
+                    group_name = target_group["name"]
+                    groups = []
+                    try:
+                        groups = c.Win32_Group(SID=sid)
+                    except Exception as e:
+                        if self._is_wmi_access_denied(e):
+                            return (None, "WMI access denied while reading group " + group_name)
+                        pass
+
+                    for group in groups:
+                        scanned_groups.append(group_name)
+
+                        # 1) Standard typed association paths
+                        for rclass, rtype in [
+                            ("Win32_UserAccount", "User"),
+                            ("Win32_Group", "Group"),
+                            ("Win32_SystemAccount", "WellKnownGroup"),
+                            ("Win32_SID", "SID"),
+                        ]:
+                            try:
+                                assoc_items = group.associators(wmi_result_class=rclass)
+                            except Exception as e:
+                                if self._is_wmi_access_denied(e):
+                                    return (None, "WMI access denied while reading members of " + group_name)
+                                assoc_items = []
+                            for a in assoc_items:
+                                name = _safe_member_name(a)
+                                if not name:
+                                    continue
+                                key = (name.lower(), rtype, group_name)
+                                if key in seen_members:
+                                    continue
+                                seen_members.add(key)
+                                members.append({"name": name, "type": rtype, "source_group": group_name})
+
+                        # 2) Raw association fallback
+                        try:
+                            raw_assoc = group.associators()
+                        except Exception as e:
+                            if self._is_wmi_access_denied(e):
+                                return (None, "WMI access denied while reading raw associations of " + group_name)
+                            raw_assoc = []
+                        for a in raw_assoc:
+                            name = _safe_member_name(a)
+                            if not name:
+                                continue
+                            p = str(getattr(a, "Path_", ""))
+                            if "Win32_Group" in p:
+                                typ = "Group"
+                            elif "Win32_UserAccount" in p:
+                                typ = "User"
+                            elif "Win32_SystemAccount" in p:
+                                typ = "WellKnownGroup"
+                            elif "Win32_SID" in p:
+                                typ = "SID"
+                            else:
+                                typ = "unknown"
+                            key = (name.lower(), typ, group_name)
+                            if key in seen_members:
+                                continue
+                            seen_members.add(key)
+                            members.append({"name": name, "type": typ, "source_group": group_name})
+
+                        # 3) Win32_GroupUser targeted query (avoid scanning all relations globally)
+                        try:
+                            gdom = getattr(group, "Domain", None) or short_host
+                            gname = getattr(group, "Name", None) or group_name
+                            gc = 'Win32_Group.Domain="%s",Name="%s"' % (str(gdom).replace('"', '\"'), str(gname).replace('"', '\"'))
+                            wql = 'SELECT * FROM Win32_GroupUser WHERE GroupComponent="%s"' % gc.replace('"', '\"')
+                            rels = c.query(wql)
+                        except Exception as e:
+                            if self._is_wmi_access_denied(e):
+                                return (None, "WMI access denied while reading GroupUser relations of " + group_name)
+                            rels = []
+
+                        for rel in rels:
+                            pc = getattr(rel, "PartComponent", "")
+                            pc_vals = _kv_from_component(pc)
+                            name = (pc_vals.get("Caption") or pc_vals.get("Name") or pc_vals.get("SID") or "").strip()
+                            if not name:
+                                continue
+                            pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
+                            if "Win32_Group" in pclass:
+                                ptype = "Group"
+                            elif "Win32_UserAccount" in pclass:
+                                ptype = "User"
+                            elif "Win32_SystemAccount" in pclass:
+                                ptype = "WellKnownGroup"
+                            elif "Win32_SID" in pclass:
+                                ptype = "SID"
+                            else:
+                                ptype = "unknown"
+                            key = (name.lower(), ptype, group_name)
+                            if key in seen_members:
+                                continue
+                            seen_members.add(key)
+                            members.append({"name": name, "type": ptype, "source_group": group_name})
+
+                if members:
+                    suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
+                    return ("WMI" + suffix, members)
+
+            if last_err is not None:
+                return (None, "WMI: " + str(last_err))
             return (None, "WMI: empty")
+
         except Exception as e:
             return (None, "WMI: " + str(e))
         finally:
@@ -824,12 +1053,22 @@ $res | ConvertTo-Json -Compress
                     if isinstance(entry, dict):
                         name = entry.get("name", "")
                         ot = entry.get("type", "unknown")
+                        src_group = entry.get("source_group")
                     else:
                         name = str(entry)
                         ot = "unknown"
+                        src_group = None
                     name = name.strip()
                     if name:
-                        classified.append(self._classify_member(name, ot))
+                        cm = self._classify_member(name, ot)
+                        if src_group:
+                            cm["source_group"] = src_group
+                        classified.append(cm)
+
+                classified = self._expand_with_domain_aliases(
+                    classified,
+                    self.config.get("domain_aliases", []),
+                )
 
                 # Разворачиваем доменные группы
                 try:
