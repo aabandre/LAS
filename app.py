@@ -356,6 +356,26 @@ class Scanner:
         )
         logger.info("LDAP GC connected to %s:3268", cfg["server"])
 
+    def _credentials_for_target(self, comp_info=None):
+        base = dict(self.config.get("ad_config", {}) or {})
+        target_type = ""
+        if isinstance(comp_info, dict):
+            target_type = str(comp_info.get("target_type") or "").strip().lower()
+
+        if target_type != "server":
+            return base
+
+        override = dict(self.config.get("server_ad_config", {}) or {})
+        if not override:
+            return base
+
+        merged = dict(base)
+        for key in ("username", "password", "domain", "netbios_domain", "server"):
+            val = override.get(key)
+            if val:
+                merged[key] = val
+        return merged
+
     @staticmethod
     def _escape_ldap_value(value):
         s = str(value or "")
@@ -630,10 +650,10 @@ class Scanner:
                 # Некоторые WMI-методы возвращают доменные группы без префикса DOMAIN\\.
                 is_domainish = True
 
-            if is_domainish and (is_group or obj_type.lower() == "unknown") and account_name:
+            if is_domainish and account_name and obj_type.lower() not in ("computer", "wellknowngroup"):
                 try:
                     group_members = self._resolve_group_members(account_name, seen_groups, domain_hint=domain_hint)
-                    if group_members is not None:
+                    if group_members:
                         member["type"] = "Group"
                         member["expanded_members"] = group_members
                         member["expanded_count"] = len(group_members)
@@ -703,8 +723,8 @@ class Scanner:
             return [{"name": full_name, "type": "User"}]
         return [{"name": full_name, "type": "unknown"}]
 
-    def _make_session(self, computer, use_ssl=False):
-        cfg = self.config["ad_config"]
+    def _make_session(self, computer, comp_info=None, use_ssl=False):
+        cfg = self._credentials_for_target(comp_info)
         if cfg.get("netbios_domain"):
             username = cfg["netbios_domain"] + "\\" + cfg["username"]
         else:
@@ -834,8 +854,8 @@ class Scanner:
                     expanded.append({"name": alt_name, "type": obj_type})
         return expanded
 
-    def _try_winrm_methods(self, computer, use_ssl=False):
-        session = self._make_session(computer, use_ssl=use_ssl)
+    def _try_winrm_methods(self, computer, comp_info=None, use_ssl=False):
+        session = self._make_session(computer, comp_info=comp_info, use_ssl=use_ssl)
         selected_groups = self._get_local_groups()
         all_members = []
         method_labels = []
@@ -976,7 +996,7 @@ $res | ConvertTo-Json -Compress
             or "access denied" in txt
         )
 
-    def _try_wmi(self, computer):
+    def _try_wmi(self, computer, comp_info=None):
         if not WMI_AVAILABLE:
             return (None, "WMI not installed")
 
@@ -989,7 +1009,7 @@ $res | ConvertTo-Json -Compress
             pass
 
         try:
-            cfg = self.config["ad_config"]
+            cfg = self._credentials_for_target(comp_info)
             username = (cfg.get("username") or "").strip()
             domain = (cfg.get("domain") or "").strip()
             netbios = (cfg.get("netbios_domain") or "").strip()
@@ -1310,7 +1330,7 @@ $res | ConvertTo-Json -Compress
             if p5985:
                 for attempt in range(2):
                     mt0 = time.time()
-                    m, r = self._try_winrm_methods(computer, False)
+                    m, r = self._try_winrm_methods(computer, comp_info=comp_info, use_ssl=False)
                     if m:
                         method = m
                         members = r
@@ -1325,7 +1345,7 @@ $res | ConvertTo-Json -Compress
 
             if members is None and p5986:
                 mt0 = time.time()
-                m, r = self._try_winrm_methods(computer, True)
+                m, r = self._try_winrm_methods(computer, comp_info=comp_info, use_ssl=True)
                 if m:
                     method = m
                     members = r
@@ -1335,7 +1355,7 @@ $res | ConvertTo-Json -Compress
 
             if members is None:
                 mt0 = time.time()
-                m, r = self._try_wmi(computer)
+                m, r = self._try_wmi(computer, comp_info=comp_info)
                 if m:
                     method = m
                     members = r
@@ -1440,9 +1460,15 @@ $res | ConvertTo-Json -Compress
             comp_list = []
             try:
                 if config.get("workstations_ou"):
-                    comp_list += self.get_computers(config["workstations_ou"])
+                    workstations = self.get_computers(config["workstations_ou"])
+                    for c in workstations:
+                        c["target_type"] = "workstation"
+                    comp_list += workstations
                 if config.get("servers_ou"):
-                    comp_list += self.get_computers(config["servers_ou"])
+                    servers = self.get_computers(config["servers_ou"])
+                    for c in servers:
+                        c["target_type"] = "server"
+                    comp_list += servers
             except Exception as e:
                 logger.error("LDAP: %s", e)
                 self.result_queue.put({"type": "error", "message": "LDAP: " + str(e)})
@@ -1566,6 +1592,8 @@ $res | ConvertTo-Json -Compress
             # Clear password from memory
             if self.config.get("ad_config"):
                 self.config["ad_config"]["password"] = "***CLEARED***"
+            if self.config.get("server_ad_config"):
+                self.config["server_ad_config"]["password"] = "***CLEARED***"
 
             self.running = False
             self.result_queue.put({
