@@ -864,6 +864,20 @@ $res | ConvertTo-Json -Compress
             def _safe_member_name(obj):
                 return (getattr(obj, "Caption", None) or getattr(obj, "Name", None) or getattr(obj, "SID", None) or "").strip()
 
+            def _skip_noise_name(name, current_sid):
+                if not name:
+                    return True
+                nm = str(name).strip()
+                if not nm:
+                    return True
+                # Ignore obvious noise that appears from some WMI providers/parsing artifacts.
+                if len(nm) == 2 and nm[1] == ":" and nm[0].isalpha():
+                    return True
+                # Do not include the group SID itself as a member.
+                if nm.upper() == str(current_sid).upper():
+                    return True
+                return False
+
             def _kv_from_component(comp):
                 vals = {}
                 if not comp:
@@ -928,7 +942,7 @@ $res | ConvertTo-Json -Compress
                                 assoc_items = []
                             for a in assoc_items:
                                 name = _safe_member_name(a)
-                                if not name:
+                                if _skip_noise_name(name, sid):
                                     continue
                                 key = (name.lower(), rtype, group_name)
                                 if key in seen_members:
@@ -957,7 +971,10 @@ $res | ConvertTo-Json -Compress
                             elif "Win32_SID" in p:
                                 typ = "SID"
                             else:
-                                typ = "unknown"
+                                # Skip non-account objects to avoid noise (e.g. logical disks).
+                                continue
+                            if _skip_noise_name(name, sid):
+                                continue
                             key = (name.lower(), typ, group_name)
                             if key in seen_members:
                                 continue
@@ -992,7 +1009,9 @@ $res | ConvertTo-Json -Compress
                             elif "Win32_SID" in pclass:
                                 ptype = "SID"
                             else:
-                                ptype = "unknown"
+                                continue
+                            if _skip_noise_name(name, sid):
+                                continue
                             key = (name.lower(), ptype, group_name)
                             if key in seen_members:
                                 continue
