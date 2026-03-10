@@ -780,6 +780,15 @@ $res | ConvertTo-Json -Compress
             return (None, "; ".join(errors))
         return (None, "No data returned")
 
+    def _is_wmi_access_denied(self, err):
+        txt = str(err).lower()
+        return (
+            "-2147024891" in txt
+            or "access is denied" in txt
+            or "отказано в доступе" in txt
+            or "access denied" in txt
+        )
+
     def _try_wmi(self, computer):
         if not WMI_AVAILABLE:
             return (None, "WMI not installed")
@@ -843,6 +852,9 @@ $res | ConvertTo-Json -Compress
                     c = wmi_module.WMI(computer=computer, user=wmi_user, password=cfg["password"])
                 except Exception as e:
                     last_err = e
+                    # Fast fail on explicit permission errors to avoid long retries.
+                    if self._is_wmi_access_denied(e):
+                        return (None, "WMI access denied for user " + wmi_user)
                     continue
 
                 members = []
@@ -856,7 +868,9 @@ $res | ConvertTo-Json -Compress
                     groups = []
                     try:
                         groups = c.Win32_Group(SID=sid)
-                    except Exception:
+                    except Exception as e:
+                        if self._is_wmi_access_denied(e):
+                            return (None, "WMI access denied while reading group " + group_name)
                         pass
 
                     for group in groups:
@@ -871,7 +885,9 @@ $res | ConvertTo-Json -Compress
                         ]:
                             try:
                                 assoc_items = group.associators(wmi_result_class=rclass)
-                            except Exception:
+                            except Exception as e:
+                                if self._is_wmi_access_denied(e):
+                                    return (None, "WMI access denied while reading members of " + group_name)
                                 assoc_items = []
                             for a in assoc_items:
                                 name = _safe_member_name(a)
@@ -886,7 +902,9 @@ $res | ConvertTo-Json -Compress
                         # 2) Raw association fallback
                         try:
                             raw_assoc = group.associators()
-                        except Exception:
+                        except Exception as e:
+                            if self._is_wmi_access_denied(e):
+                                return (None, "WMI access denied while reading raw associations of " + group_name)
                             raw_assoc = []
                         for a in raw_assoc:
                             name = _safe_member_name(a)
@@ -916,7 +934,9 @@ $res | ConvertTo-Json -Compress
                             gc = 'Win32_Group.Domain="%s",Name="%s"' % (str(gdom).replace('"', '\"'), str(gname).replace('"', '\"'))
                             wql = 'SELECT * FROM Win32_GroupUser WHERE GroupComponent="%s"' % gc.replace('"', '\"')
                             rels = c.query(wql)
-                        except Exception:
+                        except Exception as e:
+                            if self._is_wmi_access_denied(e):
+                                return (None, "WMI access denied while reading GroupUser relations of " + group_name)
                             rels = []
 
                         for rel in rels:
