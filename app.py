@@ -1547,12 +1547,18 @@ $res | ConvertTo-Json -Compress
         errors = []
 
         server_candidates = []
+        # NetAPI accepts either None (local context) or \\SERVER.
+        # Different environments behave differently, so we try several forms.
+        server_candidates.append(None)
+
         short = str(computer or "").split(".")[0].strip()
-        if short:
-            server_candidates.append("\\" + short)
         full = str(computer or "").strip()
-        if full and ("\\" + full) not in server_candidates:
-            server_candidates.append("\\" + full)
+        for srv in (short, full):
+            if not srv:
+                continue
+            for candidate in (r"\\" + srv, srv):
+                if candidate not in server_candidates:
+                    server_candidates.append(candidate)
 
         for target_group in local_groups:
             sid = target_group["sid"]
