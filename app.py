@@ -59,6 +59,13 @@ ch.setFormatter(formatter)
 ch.setLevel(logging.INFO)
 logger.addHandler(ch)
 
+
+def apply_runtime_log_settings(debug_enabled=False):
+    debug_on = bool(debug_enabled)
+    ch.setLevel(logging.DEBUG if debug_on else logging.INFO)
+    logger.info("Runtime debug logging is %s", "ENABLED" if debug_on else "disabled")
+
+
 BUILTIN_ADMINS = {
     "administrator", "администратор",
     "administrators", "администраторы",
@@ -1856,6 +1863,8 @@ $res | ConvertTo-Json -Compress
         self.running = True
         self.config = config
         self._start_time = time.time()
+
+        apply_runtime_log_settings(config.get("debug_log", False))
 
         dns_cache.clear()
         metrics.start()
