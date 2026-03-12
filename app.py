@@ -683,8 +683,8 @@ class Scanner:
             elif is_group:
                 # Некоторые WMI-методы возвращают доменные группы без префикса DOMAIN\\.
                 is_domainish = True
-            elif obj_type.lower() == "unknown" and account_name:
-                # Иногда доменная группа приходит как unknown и без DOMAIN\.
+            elif obj_type.lower() in ("unknown", "account") and account_name:
+                # На части АРМ доменная группа приходит как generic Account/unknown без DOMAIN\.
                 short = account_name.split("\\", 1)[-1].lower()
                 is_domainish = short not in BUILTIN_ADMINS
 
@@ -1158,6 +1158,20 @@ $res | ConvertTo-Json -Compress
 
             sid_cache = {}
 
+            def _member_type_from_path(path_value):
+                text = str(path_value or "").lower()
+                if "win32_group" in text:
+                    return "Group"
+                if "win32_useraccount" in text:
+                    return "User"
+                if "win32_account" in text:
+                    return "Account"
+                if "win32_systemaccount" in text:
+                    return "WellKnownGroup"
+                if "win32_sid" in text:
+                    return "SID"
+                return ""
+
             def _resolve_sid_identity(conn, sid_value):
                 sid_text = str(sid_value or "").strip()
                 if not sid_text or not sid_text.upper().startswith("S-"):
@@ -1182,12 +1196,8 @@ $res | ConvertTo-Json -Compress
                         if acc_name:
                             resolved_name = acc_name
                             pth = str(getattr(acc, "Path_", ""))
-                            if "Win32_Group" in pth:
-                                resolved_type = "Group"
-                            elif "Win32_UserAccount" in pth:
-                                resolved_type = "User"
-                            else:
-                                resolved_type = "Account"
+                            detected_type = _member_type_from_path(pth)
+                            resolved_type = detected_type if detected_type else "Account"
                             break
                     if resolved_name:
                         break
@@ -1263,6 +1273,7 @@ $res | ConvertTo-Json -Compress
                         for rclass, rtype in [
                             ("Win32_UserAccount", "User"),
                             ("Win32_Group", "Group"),
+                            ("Win32_Account", "Account"),
                             ("Win32_SystemAccount", "WellKnownGroup"),
                             ("Win32_SID", "SID"),
                         ]:
@@ -1302,15 +1313,8 @@ $res | ConvertTo-Json -Compress
                             if not name:
                                 continue
                             p = str(getattr(a, "Path_", ""))
-                            if "Win32_Group" in p:
-                                typ = "Group"
-                            elif "Win32_UserAccount" in p:
-                                typ = "User"
-                            elif "Win32_SystemAccount" in p:
-                                typ = "WellKnownGroup"
-                            elif "Win32_SID" in p:
-                                typ = "SID"
-                            else:
+                            typ = _member_type_from_path(p)
+                            if not typ:
                                 # Skip non-account objects to avoid noise (e.g. logical disks).
                                 continue
                             sid_candidate = str(getattr(a, "SID", "") or "").strip()
@@ -1347,15 +1351,8 @@ $res | ConvertTo-Json -Compress
                             if not name:
                                 continue
                             pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
-                            if "Win32_Group" in pclass:
-                                ptype = "Group"
-                            elif "Win32_UserAccount" in pclass:
-                                ptype = "User"
-                            elif "Win32_SystemAccount" in pclass:
-                                ptype = "WellKnownGroup"
-                            elif "Win32_SID" in pclass:
-                                ptype = "SID"
-                            else:
+                            ptype = _member_type_from_path(pclass)
+                            if not ptype:
                                 continue
                             sid_candidate = (pc_vals.get("SID") or "").strip()
                             if ptype == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
@@ -1387,15 +1384,8 @@ $res | ConvertTo-Json -Compress
                             if not name:
                                 continue
                             pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
-                            if "Win32_Group" in pclass:
-                                ptype = "Group"
-                            elif "Win32_UserAccount" in pclass:
-                                ptype = "User"
-                            elif "Win32_SystemAccount" in pclass:
-                                ptype = "WellKnownGroup"
-                            elif "Win32_SID" in pclass:
-                                ptype = "SID"
-                            else:
+                            ptype = _member_type_from_path(pclass)
+                            if not ptype:
                                 continue
 
                             sid_candidate = (pc_vals.get("SID") or "").strip()
@@ -1413,6 +1403,49 @@ $res | ConvertTo-Json -Compress
                                 continue
                             seen_members.add(key)
                             members.append({"name": name, "type": ptype, "source_group": group_name})
+
+                        # 3c) Broad GroupUser scan fallback for providers where exact GroupComponent filter is unreliable.
+                        if not rels and not sid_rels:
+                            try:
+                                all_rels = c.query("SELECT * FROM Win32_GroupUser")
+                            except Exception:
+                                all_rels = []
+
+                            group_dom = str(getattr(group, "Domain", "") or short_host).strip().lower()
+                            group_nm = str(getattr(group, "Name", "") or group_name).strip().lower()
+                            for rel in all_rels:
+                                gc = getattr(rel, "GroupComponent", "")
+                                gc_vals = _kv_from_component(gc)
+                                gc_name = str(gc_vals.get("Name") or "").strip().lower()
+                                if not gc_name or gc_name != group_nm:
+                                    continue
+                                gc_domain = str(gc_vals.get("Domain") or "").strip().lower()
+                                if gc_domain and gc_domain not in (group_dom, short_host):
+                                    continue
+
+                                pc = getattr(rel, "PartComponent", "")
+                                pc_vals = _kv_from_component(pc)
+                                name = _compose_account_name(pc_vals, fallback=pc)
+                                if not name:
+                                    continue
+                                pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
+                                ptype = _member_type_from_path(pclass)
+                                if not ptype:
+                                    continue
+                                sid_candidate = (pc_vals.get("SID") or "").strip()
+                                if ptype == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
+                                    resolved_name, resolved_type = _resolve_sid_identity(c, sid_candidate or name)
+                                    if resolved_name:
+                                        name = resolved_name
+                                        if resolved_type:
+                                            ptype = resolved_type
+                                if _skip_noise_name(name, sid):
+                                    continue
+                                key = (name.lower(), ptype, group_name)
+                                if key in seen_members:
+                                    continue
+                                seen_members.add(key)
+                                members.append({"name": name, "type": ptype, "source_group": group_name})
 
                 # 4) ASSOCIATORS OF fallback: often returns domain groups where standard paths are incomplete
                 for target_group in local_groups:
@@ -1436,15 +1469,8 @@ $res | ConvertTo-Json -Compress
 
                         for a in assoc_items:
                             p = str(getattr(a, "Path_", ""))
-                            if "Win32_Group" in p:
-                                typ = "Group"
-                            elif "Win32_UserAccount" in p:
-                                typ = "User"
-                            elif "Win32_SystemAccount" in p:
-                                typ = "WellKnownGroup"
-                            elif "Win32_SID" in p:
-                                typ = "SID"
-                            else:
+                            typ = _member_type_from_path(p)
+                            if not typ:
                                 continue
 
                             vals = _kv_from_component(p)
