@@ -1255,6 +1255,7 @@ $res | ConvertTo-Json -Compress
                     logger.debug("NetLocalGroupGetMembers failed for %s/%s: %s", remote_host, local_group_name, e)
                 return result
 
+            access_denied_users = []
             for wmi_user in ordered_candidates:
                 c, conn_err = self._make_wmi_connection(
                     computer=computer,
@@ -1265,9 +1266,10 @@ $res | ConvertTo-Json -Compress
                 )
                 if c is None:
                     last_err = conn_err
-                    # Fast fail on explicit permission errors to avoid long retries.
+                    # Do not fail fast on ACCESS_DENIED here: another credential format
+                    # (e.g. UPN vs NETBIOS\\user) may still succeed for the same account.
                     if self._is_wmi_access_denied(conn_err):
-                        return (None, "WMI access denied for user " + wmi_user)
+                        access_denied_users.append(wmi_user)
                     continue
 
                 members = []
@@ -1534,6 +1536,8 @@ $res | ConvertTo-Json -Compress
                     suffix = "[" + ",".join(sorted(set(scanned_groups))) + "]" if scanned_groups else ""
                     return ("WMI" + suffix, members)
 
+            if access_denied_users and last_err is not None:
+                return (None, "WMI access denied for user(s): " + ", ".join(access_denied_users))
             if last_err is not None:
                 return (None, "WMI: " + str(last_err))
             return (None, "WMI: empty")
