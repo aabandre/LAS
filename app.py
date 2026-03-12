@@ -1540,7 +1540,7 @@ $res | ConvertTo-Json -Compress
                 except Exception:
                     pass
 
-    def _try_smb_netapi(self, computer, comp_info=None):
+    def _try_rpc_samr(self, computer, comp_info=None):
         if not WIN32NET_AVAILABLE:
             return (None, "NetAPI not installed")
 
@@ -1553,7 +1553,7 @@ $res | ConvertTo-Json -Compress
         errors = []
 
         server_candidates = []
-        connected_servers = set()
+        connected_shares = set()
         cfg = self._credentials_for_target(comp_info)
         user_base = str(cfg.get("username") or "").strip()
         password = str(cfg.get("password") or "")
@@ -1587,19 +1587,27 @@ $res | ConvertTo-Json -Compress
             users = _smb_user_candidates()
             if not users:
                 return False
+            ipc_remote = str(server) + r"\IPC$"
             for smb_user in users:
                 try:
                     ui2 = {
-                        "remote": server,
+                        "remote": ipc_remote,
                         "password": password,
                         "username": smb_user,
-                        "asg_type": win32netcon.USE_DISKDEV,
+                        "asg_type": win32netcon.USE_WILDCARD,
                     }
                     win32net.NetUseAdd(None, 2, ui2)
-                    connected_servers.add(str(server))
+                    connected_shares.add(ipc_remote)
                     return True
                 except Exception:
-                    continue
+                    try:
+                        # Drop conflicting cached session (e.g. different credentials) and retry once.
+                        win32net.NetUseDel(None, ipc_remote, 2)
+                        win32net.NetUseAdd(None, 2, ui2)
+                        connected_shares.add(ipc_remote)
+                        return True
+                    except Exception:
+                        continue
             return False
 
         # IMPORTANT: do not use None here, it points to local machine context.
@@ -1665,17 +1673,22 @@ $res | ConvertTo-Json -Compress
                 errors.append(source_group + ": " + str(group_last_err)[:120])
 
         if WIN32NETCON_AVAILABLE:
-            for srv in list(connected_servers):
+            for remote in list(connected_shares):
                 try:
-                    win32net.NetUseDel(None, srv, 0)
+                    win32net.NetUseDel(None, remote, 0)
                 except Exception:
                     pass
 
         if members:
-            return ("SMB-NetAPI", members)
+            return ("RPC-SAMR", members)
         if errors:
-            return (None, "SMB-NetAPI: " + "; ".join(errors))
-        return (None, "SMB-NetAPI: empty")
+            return (None, "RPC-SAMR: " + "; ".join(errors))
+        return (None, "RPC-SAMR: empty")
+
+
+    # Backward compatibility alias for previous config/docs.
+    def _try_smb_netapi(self, computer, comp_info=None):
+        return self._try_rpc_samr(computer, comp_info=comp_info)
 
     def scan_machine(self, comp_info):
         computer = comp_info["hostname"]
@@ -1744,9 +1757,9 @@ $res | ConvertTo-Json -Compress
                 else:
                     details.append(str(r)[:200])
 
-            if members is None and p445:
+            if members is None and p445 and bool(self.config.get("use_rpc_fallback", True)):
                 mt0 = time.time()
-                m, r = self._try_smb_netapi(computer, comp_info=comp_info)
+                m, r = self._try_rpc_samr(computer, comp_info=comp_info)
                 if m:
                     method = m
                     members = r
