@@ -35,9 +35,15 @@ except ImportError:
     pass
 
 WIN32NET_AVAILABLE = False
+WIN32NETCON_AVAILABLE = False
 try:
     import win32net
     WIN32NET_AVAILABLE = True
+except ImportError:
+    pass
+try:
+    import win32netcon
+    WIN32NETCON_AVAILABLE = True
 except ImportError:
     pass
 
@@ -1534,7 +1540,7 @@ $res | ConvertTo-Json -Compress
                 except Exception:
                     pass
 
-    def _try_smb_netapi(self, computer):
+    def _try_smb_netapi(self, computer, comp_info=None):
         if not WIN32NET_AVAILABLE:
             return (None, "NetAPI not installed")
 
@@ -1547,6 +1553,55 @@ $res | ConvertTo-Json -Compress
         errors = []
 
         server_candidates = []
+        connected_servers = set()
+        cfg = self._credentials_for_target(comp_info)
+        user_base = str(cfg.get("username") or "").strip()
+        password = str(cfg.get("password") or "")
+        netbios = str(cfg.get("netbios_domain") or "").strip()
+        domain = str(cfg.get("domain") or "").strip()
+
+        def _smb_user_candidates():
+            candidates = []
+            if not user_base:
+                return candidates
+            if "\\" in user_base or "@" in user_base:
+                candidates.append(user_base)
+            else:
+                if netbios:
+                    candidates.append(netbios + "\\" + user_base)
+                if domain:
+                    candidates.append(user_base + "@" + domain)
+                candidates.append(user_base)
+            uniq = []
+            seen = set()
+            for cnd in candidates:
+                key = cnd.lower()
+                if cnd and key not in seen:
+                    seen.add(key)
+                    uniq.append(cnd)
+            return uniq
+
+        def _ensure_smb_session(server):
+            if not WIN32NETCON_AVAILABLE:
+                return False
+            users = _smb_user_candidates()
+            if not users:
+                return False
+            for smb_user in users:
+                try:
+                    ui2 = {
+                        "remote": server,
+                        "password": password,
+                        "username": smb_user,
+                        "asg_type": win32netcon.USE_DISKDEV,
+                    }
+                    win32net.NetUseAdd(None, 2, ui2)
+                    connected_servers.add(str(server))
+                    return True
+                except Exception:
+                    continue
+            return False
+
         # IMPORTANT: do not use None here, it points to local machine context.
         # We must query only the remote target host.
         short = str(computer or "").split(".")[0].strip()
@@ -1572,6 +1627,8 @@ $res | ConvertTo-Json -Compress
             group_last_err = None
 
             for server in server_candidates:
+                # Try explicit SMB session with provided credentials (helps when process token lacks remote admin rights).
+                _ensure_smb_session(server)
                 for group_name in aliases:
                     try:
                         resume = 0
@@ -1606,6 +1663,13 @@ $res | ConvertTo-Json -Compress
 
             if not group_ok and group_last_err is not None:
                 errors.append(source_group + ": " + str(group_last_err)[:120])
+
+        if WIN32NETCON_AVAILABLE:
+            for srv in list(connected_servers):
+                try:
+                    win32net.NetUseDel(None, srv, 0)
+                except Exception:
+                    pass
 
         if members:
             return ("SMB-NetAPI", members)
@@ -1682,7 +1746,7 @@ $res | ConvertTo-Json -Compress
 
             if members is None and p445:
                 mt0 = time.time()
-                m, r = self._try_smb_netapi(computer)
+                m, r = self._try_smb_netapi(computer, comp_info=comp_info)
                 if m:
                     method = m
                     members = r
