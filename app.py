@@ -68,6 +68,13 @@ LOCAL_GROUP_PRESETS = {
     "S-1-5-32-580": {"key": "remote_management_users", "name": "Remote Management Users"},
 }
 
+LOCAL_GROUP_NAME_ALIASES = {
+    "S-1-5-32-544": ["Administrators", "Администраторы"],
+    "S-1-5-32-555": ["Remote Desktop Users", "Пользователи удаленного рабочего стола", "Пользователи удалённого рабочего стола"],
+    "S-1-5-32-562": ["Distributed COM Users", "Пользователи распределенного COM", "Пользователи распределённого COM"],
+    "S-1-5-32-580": ["Remote Management Users", "Пользователи удаленного управления", "Пользователи удалённого управления"],
+}
+
 app = FastAPI()
 
 if getattr(sys, "frozen", False):
@@ -1527,6 +1534,81 @@ $res | ConvertTo-Json -Compress
                 except Exception:
                     pass
 
+    def _try_smb_netapi(self, computer):
+        if not WIN32NET_AVAILABLE:
+            return (None, "NetAPI not installed")
+
+        local_groups = self._get_local_groups()
+        if not local_groups:
+            return (None, "No local groups selected")
+
+        members = []
+        seen = set()
+        errors = []
+
+        server_candidates = []
+        short = str(computer or "").split(".")[0].strip()
+        if short:
+            server_candidates.append("\\" + short)
+        full = str(computer or "").strip()
+        if full and ("\\" + full) not in server_candidates:
+            server_candidates.append("\\" + full)
+
+        for target_group in local_groups:
+            sid = target_group["sid"]
+            source_group = target_group["name"]
+            aliases = []
+            for nm in LOCAL_GROUP_NAME_ALIASES.get(sid, []):
+                if nm and nm not in aliases:
+                    aliases.append(nm)
+            if source_group not in aliases:
+                aliases.insert(0, source_group)
+
+            group_ok = False
+            group_last_err = None
+
+            for server in server_candidates:
+                for group_name in aliases:
+                    try:
+                        resume = 0
+                        while True:
+                            data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, 2, resume, 4096)
+                            for item in data:
+                                domain_and_name = str(item.get("domainandname") or "").strip()
+                                if not domain_and_name:
+                                    continue
+                                sid_usage = int(item.get("sidusage", 0) or 0)
+                                if sid_usage in (2, 4, 5):
+                                    typ = "Group"
+                                elif sid_usage in (1, 6, 7):
+                                    typ = "User"
+                                else:
+                                    typ = "Account"
+
+                                key = (domain_and_name.lower(), typ, source_group)
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
+                            if not resume:
+                                break
+                        group_ok = True
+                        break
+                    except Exception as e:
+                        group_last_err = e
+                        continue
+                if group_ok:
+                    break
+
+            if not group_ok and group_last_err is not None:
+                errors.append(source_group + ": " + str(group_last_err)[:120])
+
+        if members:
+            return ("SMB-NetAPI", members)
+        if errors:
+            return (None, "SMB-NetAPI: " + "; ".join(errors))
+        return (None, "SMB-NetAPI: empty")
+
     def scan_machine(self, comp_info):
         computer = comp_info["hostname"]
         os_name = comp_info.get("os", "")
@@ -1587,6 +1669,16 @@ $res | ConvertTo-Json -Compress
             if members is None:
                 mt0 = time.time()
                 m, r = self._try_wmi(computer, comp_info=comp_info)
+                if m:
+                    method = m
+                    members = r
+                    metrics.add_method_timing(m, time.time() - mt0)
+                else:
+                    details.append(str(r)[:200])
+
+            if members is None and p445:
+                mt0 = time.time()
+                m, r = self._try_smb_netapi(computer)
                 if m:
                     method = m
                     members = r
