@@ -1404,6 +1404,49 @@ $res | ConvertTo-Json -Compress
                             seen_members.add(key)
                             members.append({"name": name, "type": ptype, "source_group": group_name})
 
+                        # 3c) Broad GroupUser scan fallback for providers where exact GroupComponent filter is unreliable.
+                        if not rels and not sid_rels:
+                            try:
+                                all_rels = c.query("SELECT * FROM Win32_GroupUser")
+                            except Exception:
+                                all_rels = []
+
+                            group_dom = str(getattr(group, "Domain", "") or short_host).strip().lower()
+                            group_nm = str(getattr(group, "Name", "") or group_name).strip().lower()
+                            for rel in all_rels:
+                                gc = getattr(rel, "GroupComponent", "")
+                                gc_vals = _kv_from_component(gc)
+                                gc_name = str(gc_vals.get("Name") or "").strip().lower()
+                                if not gc_name or gc_name != group_nm:
+                                    continue
+                                gc_domain = str(gc_vals.get("Domain") or "").strip().lower()
+                                if gc_domain and gc_domain not in (group_dom, short_host):
+                                    continue
+
+                                pc = getattr(rel, "PartComponent", "")
+                                pc_vals = _kv_from_component(pc)
+                                name = _compose_account_name(pc_vals, fallback=pc)
+                                if not name:
+                                    continue
+                                pclass = str(pc).split(":", 1)[-1].split(".", 1)[0]
+                                ptype = _member_type_from_path(pclass)
+                                if not ptype:
+                                    continue
+                                sid_candidate = (pc_vals.get("SID") or "").strip()
+                                if ptype == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
+                                    resolved_name, resolved_type = _resolve_sid_identity(c, sid_candidate or name)
+                                    if resolved_name:
+                                        name = resolved_name
+                                        if resolved_type:
+                                            ptype = resolved_type
+                                if _skip_noise_name(name, sid):
+                                    continue
+                                key = (name.lower(), ptype, group_name)
+                                if key in seen_members:
+                                    continue
+                                seen_members.add(key)
+                                members.append({"name": name, "type": ptype, "source_group": group_name})
+
                 # 4) ASSOCIATORS OF fallback: often returns domain groups where standard paths are incomplete
                 for target_group in local_groups:
                     sid = target_group["sid"]
