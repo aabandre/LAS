@@ -683,8 +683,8 @@ class Scanner:
             elif is_group:
                 # Некоторые WMI-методы возвращают доменные группы без префикса DOMAIN\\.
                 is_domainish = True
-            elif obj_type.lower() == "unknown" and account_name:
-                # Иногда доменная группа приходит как unknown и без DOMAIN\.
+            elif obj_type.lower() in ("unknown", "account") and account_name:
+                # На части АРМ доменная группа приходит как generic Account/unknown без DOMAIN\.
                 short = account_name.split("\\", 1)[-1].lower()
                 is_domainish = short not in BUILTIN_ADMINS
 
@@ -1306,6 +1306,8 @@ $res | ConvertTo-Json -Compress
                                 typ = "Group"
                             elif "Win32_UserAccount" in p:
                                 typ = "User"
+                            elif "Win32_Account" in p:
+                                typ = "Account"
                             elif "Win32_SystemAccount" in p:
                                 typ = "WellKnownGroup"
                             elif "Win32_SID" in p:
@@ -1351,6 +1353,8 @@ $res | ConvertTo-Json -Compress
                                 ptype = "Group"
                             elif "Win32_UserAccount" in pclass:
                                 ptype = "User"
+                            elif "Win32_Account" in pclass:
+                                ptype = "Account"
                             elif "Win32_SystemAccount" in pclass:
                                 ptype = "WellKnownGroup"
                             elif "Win32_SID" in pclass:
@@ -1391,6 +1395,8 @@ $res | ConvertTo-Json -Compress
                                 ptype = "Group"
                             elif "Win32_UserAccount" in pclass:
                                 ptype = "User"
+                            elif "Win32_Account" in pclass:
+                                ptype = "Account"
                             elif "Win32_SystemAccount" in pclass:
                                 ptype = "WellKnownGroup"
                             elif "Win32_SID" in pclass:
@@ -1440,6 +1446,8 @@ $res | ConvertTo-Json -Compress
                                 typ = "Group"
                             elif "Win32_UserAccount" in p:
                                 typ = "User"
+                            elif "Win32_Account" in p:
+                                typ = "Account"
                             elif "Win32_SystemAccount" in p:
                                 typ = "WellKnownGroup"
                             elif "Win32_SID" in p:
