@@ -1540,9 +1540,11 @@ $res | ConvertTo-Json -Compress
                 except Exception:
                     pass
 
-    def _try_rpc_samr(self, computer, comp_info=None):
+    def _try_rpc_samr(self, computer, comp_info=None, _cfg_override=None):
         if not WIN32NET_AVAILABLE:
             return (None, "NetAPI not installed")
+
+        cfg = _cfg_override if isinstance(_cfg_override, dict) else self._credentials_for_target(comp_info)
 
         local_groups = self._get_local_groups()
         if not local_groups:
@@ -1554,7 +1556,6 @@ $res | ConvertTo-Json -Compress
 
         server_candidates = []
         connected_shares = set()
-        cfg = self._credentials_for_target(comp_info)
         user_base = str(cfg.get("username") or "").strip()
         password = str(cfg.get("password") or "")
         netbios = str(cfg.get("netbios_domain") or "").strip()
@@ -1681,6 +1682,28 @@ $res | ConvertTo-Json -Compress
 
         if members:
             return ("RPC-SAMR", members)
+
+        # If primary credentials failed, try alternate server credential set once.
+        if _cfg_override is None:
+            override = dict(self.config.get("server_ad_config", {}) or {})
+            if override:
+                alt_cfg = dict(self.config.get("ad_config", {}) or {})
+                for key in ("username", "password", "domain", "netbios_domain", "server"):
+                    val = override.get(key)
+                    if val:
+                        alt_cfg[key] = val
+                if alt_cfg:
+                    cur_user = str(cfg.get("username") or "")
+                    cur_pass = str(cfg.get("password") or "")
+                    alt_user = str(alt_cfg.get("username") or "")
+                    alt_pass = str(alt_cfg.get("password") or "")
+                    if (alt_user, alt_pass) != (cur_user, cur_pass):
+                        m2, r2 = self._try_rpc_samr(computer, comp_info=comp_info, _cfg_override=alt_cfg)
+                        if m2:
+                            return (m2, r2)
+                        if r2:
+                            errors.append("alt-creds: " + str(r2)[:200])
+
         if errors:
             return (None, "RPC-SAMR: " + "; ".join(errors))
         return (None, "RPC-SAMR: empty")
