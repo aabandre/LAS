@@ -1273,6 +1273,7 @@ $res | ConvertTo-Json -Compress
                         for rclass, rtype in [
                             ("Win32_UserAccount", "User"),
                             ("Win32_Group", "Group"),
+                            ("Win32_Account", "Account"),
                             ("Win32_SystemAccount", "WellKnownGroup"),
                             ("Win32_SID", "SID"),
                         ]:
