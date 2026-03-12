@@ -1568,6 +1568,12 @@ $res | ConvertTo-Json -Compress
         netbios = str(cfg.get("netbios_domain") or "").strip()
         domain = str(cfg.get("domain") or "").strip()
 
+        def _fmt_exc(err):
+            txt = str(err)
+            if len(txt) > 180:
+                txt = txt[:180]
+            return txt
+
         def _smb_user_candidates():
             candidates = []
             if not user_base:
@@ -1591,11 +1597,12 @@ $res | ConvertTo-Json -Compress
 
         def _ensure_smb_session(server):
             if not WIN32NETCON_AVAILABLE:
-                return False
+                return (False, "win32netcon unavailable")
             users = _smb_user_candidates()
             if not users:
-                return False
+                return (False, "no smb user candidates")
             ipc_remote = str(server) + r"\IPC$"
+            last_err = ""
             for smb_user in users:
                 try:
                     ui2 = {
@@ -1606,17 +1613,19 @@ $res | ConvertTo-Json -Compress
                     }
                     win32net.NetUseAdd(None, 2, ui2)
                     connected_shares.add(ipc_remote)
-                    return True
-                except Exception:
+                    return (True, "session user=" + smb_user)
+                except Exception as e1:
+                    last_err = smb_user + ": " + _fmt_exc(e1)
                     try:
                         # Drop conflicting cached session (e.g. different credentials) and retry once.
                         win32net.NetUseDel(None, ipc_remote, 2)
                         win32net.NetUseAdd(None, 2, ui2)
                         connected_shares.add(ipc_remote)
-                        return True
-                    except Exception:
+                        return (True, "session(retry) user=" + smb_user)
+                    except Exception as e2:
+                        last_err = smb_user + ": " + _fmt_exc(e2)
                         continue
-            return False
+            return (False, last_err or "session open failed")
 
         # IMPORTANT: do not use None here, it points to local machine context.
         # We must query only the remote target host.
@@ -1640,11 +1649,13 @@ $res | ConvertTo-Json -Compress
                 aliases.insert(0, source_group)
 
             group_ok = False
-            group_last_err = None
+            group_attempt_errors = []
 
             for server in server_candidates:
                 # Try explicit SMB session with provided credentials (helps when process token lacks remote admin rights).
-                _ensure_smb_session(server)
+                session_ok, session_note = _ensure_smb_session(server)
+                if not session_ok:
+                    logger.debug("RPC-SAMR session open failed for %s via %s: %s", computer, server, session_note)
                 for group_name in aliases:
                     try:
                         resume = 0
@@ -1672,13 +1683,23 @@ $res | ConvertTo-Json -Compress
                         group_ok = True
                         break
                     except Exception as e:
-                        group_last_err = e
+                        detail = (
+                            "server=" + str(server) +
+                            ", group=" + str(group_name) +
+                            ", session=" + ("ok" if session_ok else "fail") +
+                            (", " + session_note if session_note else "") +
+                            ", err=" + _fmt_exc(e)
+                        )
+                        group_attempt_errors.append(detail)
                         continue
                 if group_ok:
                     break
 
-            if not group_ok and group_last_err is not None:
-                errors.append(source_group + ": " + str(group_last_err)[:120])
+            if not group_ok:
+                if group_attempt_errors:
+                    errors.append(source_group + ": " + " || ".join(group_attempt_errors[:3]))
+                else:
+                    errors.append(source_group + ": no successful attempts")
 
         if WIN32NETCON_AVAILABLE:
             for remote in list(connected_shares):
