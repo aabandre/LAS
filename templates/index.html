@@ -108,6 +108,7 @@
         </div>
         <div class="form-row-inline">
             <label><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
+            <label><input type="checkbox" id="cfgDebugLog"> <span data-i18n="lbl_debug_log">Enable debug log (verbose reasons)</span></label>
         </div>
         <button class="btn btn-start" id="btnStart" onclick="doStart()" data-i18n="btn_start">Start Scan</button>
         <button class="btn btn-stop" id="btnStop" onclick="doStop()" disabled data-i18n="btn_stop">Stop</button>
@@ -173,6 +174,7 @@ var LANG = {
         grp_dcom: "Distributed COM Users",
         grp_winrm: "Remote Management Users",
         lbl_expand: "Expand domain groups via LDAP",
+        lbl_debug_log: "Enable debug log (verbose reasons)",
         progress_title: "Progress",
         st_scanned: "Scanned",
         st_total: "Total",
@@ -220,6 +222,7 @@ var LANG = {
         grp_dcom: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0440\u0430\u0441\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d\u043d\u043e\u0433\u043e COM",
         grp_winrm: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",
         lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP",
+        lbl_debug_log: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c debug-\u043b\u043e\u0433 (\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u044b\u0435 \u043f\u0440\u0438\u0447\u0438\u043d\u044b)",
         progress_title: "\u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441",
         st_scanned: "\u041f\u0440\u043e\u0441\u043a\u0430\u043d.",
         st_total: "\u0412\u0441\u0435\u0433\u043e",
@@ -347,7 +350,8 @@ function saveSettings(){
                 distributedComUsers:$("grpDcom").checked,
                 remoteManagementUsers:$("grpWinRm").checked
             },
-            expand:$("cfgExpand").checked
+            expand:$("cfgExpand").checked,
+            debugLog:$("cfgDebugLog").checked
         };
         localStorage.setItem("scannerSettings",JSON.stringify(data));
         alert(t("settings_saved"))
@@ -381,7 +385,8 @@ function applySettings(d){
         if(d.groups.hasOwnProperty("distributedComUsers")) $("grpDcom").checked=!!d.groups.distributedComUsers;
         if(d.groups.hasOwnProperty("remoteManagementUsers")) $("grpWinRm").checked=!!d.groups.remoteManagementUsers;
     }
-    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=d.expand
+    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=d.expand;
+    if(d.hasOwnProperty("debugLog")) $("cfgDebugLog").checked=!!d.debugLog
 }
 
 try{
@@ -423,7 +428,8 @@ function doStart(){
         allowed_admins:allowed,
         domain_aliases:domainAliases,
         group_targets:groupTargets,
-        expand_groups:$("cfgExpand").checked
+        expand_groups:$("cfgExpand").checked,
+        debug_log:$("cfgDebugLog").checked
     }};
     if(!config.scan.ad_config.server||!config.scan.ad_config.username||!config.scan.ad_config.password){
         alert(t("fill_fields"));return
