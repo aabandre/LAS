@@ -302,6 +302,34 @@ function isLA(s){return s==="administrator"||s==="\u0430\u0434\u043c\u0438\u043d
 function isBuiltinName(s){return isLA(s)||s==="administrators"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b"||s==="guests"||s==="\u0433\u043e\u0441\u0442\u0438"}
 function isGroupType(tp){var t=(tp||"").toLowerCase();return t.indexOf("group")>-1||t.indexOf("nested")>-1||t.indexOf("\u0433\u0440\u0443\u043f\u043f")>-1}
 
+
+function saveAdminFilters(){
+    try{
+        var payload={
+            hideLocalAdmin: $("hideLocalAdmin")?$("hideLocalAdmin").checked:false,
+            hideAllBuiltin: $("hideAllBuiltin")?$("hideAllBuiltin").checked:false,
+            showOnlyCustom: $("showOnlyCustom")?$("showOnlyCustom").checked:false,
+            showOnlyViaGroup: $("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,
+            hideGroupHeaders: $("hideGroupHeaders")?$("hideGroupHeaders").checked:false,
+            machineFilter: val("machineFilter")
+        };
+        localStorage.setItem("summaryAdminFilters", JSON.stringify(payload));
+    }catch(e){}
+}
+
+function loadAdminFilters(){
+    try{
+        var raw=localStorage.getItem("summaryAdminFilters");
+        if(!raw) return;
+        var data=JSON.parse(raw);
+        if(data.hasOwnProperty("hideLocalAdmin")&&$("hideLocalAdmin")) $("hideLocalAdmin").checked=!!data.hideLocalAdmin;
+        if(data.hasOwnProperty("hideAllBuiltin")&&$("hideAllBuiltin")) $("hideAllBuiltin").checked=!!data.hideAllBuiltin;
+        if(data.hasOwnProperty("showOnlyCustom")&&$("showOnlyCustom")) $("showOnlyCustom").checked=!!data.showOnlyCustom;
+        if(data.hasOwnProperty("showOnlyViaGroup")&&$("showOnlyViaGroup")) $("showOnlyViaGroup").checked=!!data.showOnlyViaGroup;
+        if(data.hasOwnProperty("hideGroupHeaders")&&$("hideGroupHeaders")) $("hideGroupHeaders").checked=!!data.hideGroupHeaders;
+        if(data.hasOwnProperty("machineFilter")&&$("machineFilter")) $("machineFilter").value=data.machineFilter||"";
+    }catch(e){}
+}
 getJSON("/api/scans",function(s,data){
     if(!data)return;var sel=$("selScan"),s1=$("selDiff1"),s2=$("selDiff2"),hist=$("historyBody"),hh="";
     for(var i=0;i<data.length;i++){var f=data[i];
@@ -330,7 +358,7 @@ function renderAll(){if(!SD)return;buildTabs();applyLang();renderCards();
     drawPie("cResults","lResults",{"Success":SD.success||0,"Errors":SD.errors||0},["#5cb85c","#d9534f"]);
     drawPie("cMethods","lMethods",SD.method_breakdown||{},COLORS);drawPie("cErrors","lErrors",SD.error_breakdown||{},COLORS.slice(2));
     drawPie("cOS","lOS",SD.os_breakdown||{},COLORS.slice(4));drawPie("cPorts","lPorts",SD.port_statistics||{},COLORS);
-    renderAdmins();renderMachineFilter();renderMachineDetails();renderRisky();renderClean();renderHeatmap()}
+    renderAdmins();renderMachineFilter();loadAdminFilters();filterAdmins();renderMachineDetails();renderRisky();renderClean();renderHeatmap()}
 
 function renderCards(){var d=SD,sb=d.severity_breakdown||{};
     var items=[{v:d.total_scanned||0,l:"card_total",c:"c-blue"},{v:d.success||0,l:"card_success",c:"c-green"},{v:d.errors||0,l:"card_errors",c:"c-red"},
@@ -364,7 +392,7 @@ function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineF
     for(var i=0;i<rows.length;i++){var row=rows[i],sd=row.getAttribute("data-search")||"",ila=row.getAttribute("data-is-la")==="1",ibi=row.getAttribute("data-is-bi")==="1",icu=row.getAttribute("data-is-custom")==="1",hv=row.getAttribute("data-has-via")==="1",ig=row.getAttribute("data-is-group")==="1";
         var mds=row.getAttribute("data-machines")||"";
         var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&mf&&mds.indexOf(mf)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;
-        row.style.display=show?"":"none";if(show)vis++}$("adminShowing").innerHTML=vis}
+        row.style.display=show?"":"none";if(show)vis++}$("adminShowing").innerHTML=vis;saveAdminFilters()
 
 
 function renderMachineFilter(){
@@ -377,6 +405,7 @@ function renderMachineFilter(){
     for(var i=0;i<keys.length;i++)h+='<option value="'+keys[i]+'">'+keys[i]+'</option>';
     sel.innerHTML=h;
     if(current){sel.value=current}
+    saveAdminFilters();
 }
 
 function filterMachineOptions(){
