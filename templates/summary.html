@@ -147,6 +147,7 @@
                     <label><input type="checkbox" id="showOnlyCustom" onchange="filterAdmins()"> <span data-i18n="adm_only_custom">Only custom</span></label>
                     <label><input type="checkbox" id="showOnlyViaGroup" onchange="filterAdmins()"> <span data-i18n="adm_only_via">Only via group</span></label>
                     <label><input type="checkbox" id="hideGroupHeaders" onchange="filterAdmins()"> <span data-i18n="adm_hide_groups">Hide groups</span></label>
+                    <label><input type="checkbox" id="showOnlyLocalFromGroups" onchange="filterAdmins()"> <span data-i18n="adm_only_local_groups">Only local from groups</span></label>
                 </div>
                 <table id="adminTable">
                     <thead><tr>
@@ -218,7 +219,7 @@ en:{
     ch_results:"Results",ch_methods:"Methods",ch_errors:"Errors",ch_os:"OS",ch_ports:"Ports",
     adm_title:"All Admin Accounts",adm_showing:"Showing",adm_of:"of",adm_search:"Search accounts...",
     adm_hide_admin:"Hide Administrator",adm_hide_builtin:"Hide ALL built-in",adm_only_custom:"Only custom",
-    adm_only_via:"Only via group",adm_hide_groups:"Hide groups",
+    adm_only_via:"Only via group",adm_hide_groups:"Hide groups",adm_only_local_groups:"Only local from groups",
     machine_filter:"Machine:",machine_all:"All machines",machine_quick_search:"Find machine...",machine_detail_empty:"Select a machine to view detailed memberships",
     machine_detail_error:"Machine scan error",machine_detail_groups:"Local groups and resolved memberships",
     col_account:"Account",col_type:"Type",col_count:"Count",col_via:"Via Group",col_machines:"Machines",
@@ -248,7 +249,7 @@ ru:{
     adm_hide_builtin:"\u0421\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0435 \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u044b\u0435",
     adm_only_custom:"\u0422\u043e\u043b\u044c\u043a\u043e \u043d\u0435\u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u044b\u0435",
     adm_only_via:"\u0422\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043f\u043f\u0443",
-    adm_hide_groups:"\u0421\u043a\u0440\u044b\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u044b",
+    adm_hide_groups:"\u0421\u043a\u0440\u044b\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u044b",adm_only_local_groups:"\u0422\u043e\u043b\u044c\u043a\u043e \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u0438\u0437 \u0433\u0440\u0443\u043f\u043f",
     machine_filter:"\u041c\u0430\u0448\u0438\u043d\u0430:",machine_all:"\u0412\u0441\u0435 \u043c\u0430\u0448\u0438\u043d\u044b",machine_quick_search:"\u041d\u0430\u0439\u0442\u0438 \u043c\u0430\u0448\u0438\u043d\u0443...",machine_detail_empty:"\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043c\u0430\u0448\u0438\u043d\u0443 \u0434\u043b\u044f \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u043e\u0433\u043e \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430",
     machine_detail_error:"\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043a\u0430\u043d\u0430 \u043c\u0430\u0448\u0438\u043d\u044b",machine_detail_groups:"\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0438 \u0438\u0445 \u0441\u043e\u0441\u0442\u0430\u0432",
     col_account:"\u0423\u0447\u0451\u0442\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c",
@@ -302,6 +303,20 @@ function isLA(s){return s==="administrator"||s==="\u0430\u0434\u043c\u0438\u043d
 function isBuiltinName(s){return isLA(s)||s==="administrators"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b"||s==="guests"||s==="\u0433\u043e\u0441\u0442\u0438"}
 function isGroupType(tp){var t=(tp||"").toLowerCase();return t.indexOf("group")>-1||t.indexOf("nested")>-1||t.indexOf("\u0433\u0440\u0443\u043f\u043f")>-1}
 
+function isDomainAccountForRow(account,machines){
+    var a=(account||"").toLowerCase();
+    if(a.indexOf("\\")===-1)return false;
+    var p=a.split("\\",1)[0];
+    if(!p||p==="builtin"||p==="nt authority"||p==="local"||p===".")return false;
+    var ms=machines||[];
+    for(var i=0;i<ms.length;i++){
+        var m=String(ms[i]||"").toLowerCase();
+        var sh=m.split(".",1)[0];
+        if(p===m||p===sh)return false;
+    }
+    return true;
+}
+
 
 function saveAdminFilters(){
     try{
@@ -311,6 +326,7 @@ function saveAdminFilters(){
             showOnlyCustom: $("showOnlyCustom")?$("showOnlyCustom").checked:false,
             showOnlyViaGroup: $("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,
             hideGroupHeaders: $("hideGroupHeaders")?$("hideGroupHeaders").checked:false,
+            showOnlyLocalFromGroups: $("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false,
             machineFilter: val("machineFilter")
         };
         localStorage.setItem("summaryAdminFilters", JSON.stringify(payload));
@@ -327,6 +343,7 @@ function loadAdminFilters(){
         if(data.hasOwnProperty("showOnlyCustom")&&$("showOnlyCustom")) $("showOnlyCustom").checked=!!data.showOnlyCustom;
         if(data.hasOwnProperty("showOnlyViaGroup")&&$("showOnlyViaGroup")) $("showOnlyViaGroup").checked=!!data.showOnlyViaGroup;
         if(data.hasOwnProperty("hideGroupHeaders")&&$("hideGroupHeaders")) $("hideGroupHeaders").checked=!!data.hideGroupHeaders;
+        if(data.hasOwnProperty("showOnlyLocalFromGroups")&&$("showOnlyLocalFromGroups")) $("showOnlyLocalFromGroups").checked=!!data.showOnlyLocalFromGroups;
         if(data.hasOwnProperty("machineFilter")&&$("machineFilter")) $("machineFilter").value=data.machineFilter||"";
     }catch(e){}
 }
@@ -380,18 +397,18 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         var isBI=a.is_builtin===true||isBuiltinName(short),isLAd=a.hasOwnProperty("is_local_admin")?a.is_local_admin===true:isLA(short);
         var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=isGroupType(aType);
         var tagT,tagC;if(isLAd){tagT="local-admin";tagC="tag-local-admin"}else if(isGrp){tagT="group";tagC="tag-nested"}else if(isBI){tagT="builtin";tagC="tag-builtin"}else{tagT="custom";tagC="tag-risk"}
-        var tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",mList=(a.machines||[]).join(", ");
-        html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\">"
+        var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",mList=(a.machines||[]).join(", ");
+        html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
             +"<td>"+(i+1)+"</td><td>"+a.account+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
             +"<td class=\"via-cell\">"+via+"</td><td><div class=\"machines-cell\">"+mList+"</div></td></tr>"}
     $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;filterAdmins()}
 
-function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false;
+function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false,oLG=$("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false;
     var rows=$("adminBody").getElementsByTagName("tr"),vis=0;
-    for(var i=0;i<rows.length;i++){var row=rows[i],sd=row.getAttribute("data-search")||"",ila=row.getAttribute("data-is-la")==="1",ibi=row.getAttribute("data-is-bi")==="1",icu=row.getAttribute("data-is-custom")==="1",hv=row.getAttribute("data-has-via")==="1",ig=row.getAttribute("data-is-group")==="1";
+    for(var i=0;i<rows.length;i++){var row=rows[i],sd=row.getAttribute("data-search")||"",ila=row.getAttribute("data-is-la")==="1",ibi=row.getAttribute("data-is-bi")==="1",icu=row.getAttribute("data-is-custom")==="1",hv=row.getAttribute("data-has-via")==="1",ig=row.getAttribute("data-is-group")==="1",idm=row.getAttribute("data-is-domain")==="1";
         var mds=row.getAttribute("data-machines")||"";
-        var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&mf&&mds.indexOf(mf)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;
+        var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&mf&&mds.indexOf(mf)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;if(show&&oLG&&hv&&idm)show=false;
         row.style.display=show?"":"none";if(show)vis++}$("adminShowing").innerHTML=vis;saveAdminFilters()
 }
 

@@ -1708,7 +1708,7 @@ $res | ConvertTo-Json -Compress
                     "remote": ipc_remote,
                     "password": password,
                     "username": smb_user,
-                    "asg_type": win32netcon.USE_WILDCARD,
+                    "asg_type": getattr(win32netcon, "USE_WILDCARD", 0),
                 }
                 try:
                     win32net.NetUseAdd(None, 2, ui2)
