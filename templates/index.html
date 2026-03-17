@@ -430,10 +430,7 @@ function doStart(){
     if($("grpRdp").checked) groupTargets.push("S-1-5-32-555");
     if($("grpDcom").checked) groupTargets.push("S-1-5-32-562");
     if($("grpWinRm").checked) groupTargets.push("S-1-5-32-580");
-    if(!groupTargets.length){
-        alert(t("select_group"));
-        return;
-    }
+    if(!groupTargets.length){ alert("Select at least one local group to scan"); return; }
 
     var config={scan:{
         ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:val("cfgUser"),password:val("cfgPass")},
