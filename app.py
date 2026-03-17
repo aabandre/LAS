@@ -935,17 +935,15 @@ class Scanner:
 
     def _normalize_group_targets(self):
         selected = self.config.get("group_targets")
-        if not selected:
+        if selected is None:
             return ["S-1-5-32-544"]
 
         normalized = []
         for sid in selected:
             sid_str = str(sid).strip()
-            if sid_str in LOCAL_GROUP_PRESETS:
+            if sid_str in LOCAL_GROUP_PRESETS and sid_str not in normalized:
                 normalized.append(sid_str)
 
-        if not normalized:
-            return ["S-1-5-32-544"]
         return normalized
 
     def _get_local_groups(self):
@@ -1662,14 +1660,21 @@ $res | ConvertTo-Json -Compress
             candidates = []
             if not user_base:
                 return candidates
-            if "\\" in user_base or "@" in user_base:
-                candidates.append(user_base)
-            else:
-                if netbios:
-                    candidates.append(netbios + "\\" + user_base)
-                if domain:
-                    candidates.append(user_base + "@" + domain)
-                candidates.append(user_base)
+
+            base_short = user_base
+            if "\\" in user_base:
+                base_short = user_base.split("\\", 1)[1].strip() or user_base
+            elif "@" in user_base:
+                base_short = user_base.split("@", 1)[0].strip() or user_base
+
+            candidates.append(user_base)
+            if netbios and base_short:
+                candidates.append(netbios + "\\" + base_short)
+            if domain and base_short:
+                candidates.append(base_short + "@" + domain)
+            if base_short:
+                candidates.append(base_short)
+
             uniq = []
             seen = set()
             for cnd in candidates:
@@ -1742,30 +1747,55 @@ $res | ConvertTo-Json -Compress
                     logger.debug("RPC-SAMR session open failed for %s via %s: %s", computer, server, session_note)
                 for group_name in aliases:
                     try:
-                        resume = 0
-                        while True:
-                            data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, 2, resume, 4096)
-                            for item in data:
-                                domain_and_name = str(item.get("domainandname") or "").strip()
-                                if not domain_and_name:
-                                    continue
-                                sid_usage = int(item.get("sidusage", 0) or 0)
-                                if sid_usage in (2, 4, 5):
-                                    typ = "Group"
-                                elif sid_usage in (1, 6, 7):
-                                    typ = "User"
-                                else:
-                                    typ = "Account"
+                        level_errors = []
+                        fetched_any = False
+                        for lvl in (2, 1, 0):
+                            try:
+                                resume = 0
+                                while True:
+                                    data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, lvl, resume, 4096)
+                                    fetched_any = True
+                                    for item in data:
+                                        if lvl == 2:
+                                            raw_name = item.get("domainandname")
+                                            sid_usage = int(item.get("sidusage", 0) or 0)
+                                        elif lvl == 1:
+                                            raw_name = item.get("name") or item.get("domainandname")
+                                            sid_usage = int(item.get("sidusage", 0) or 0)
+                                        else:
+                                            raw_name = item.get("domainandname") or item.get("name") or item.get("sid")
+                                            sid_usage = int(item.get("sidusage", 0) or 0)
 
-                                key = (domain_and_name.lower(), typ, source_group)
-                                if key in seen:
-                                    continue
-                                seen.add(key)
-                                members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
-                            if not resume:
-                                break
-                        group_ok = True
-                        break
+                                        domain_and_name = str(raw_name or "").strip()
+                                        if not domain_and_name:
+                                            continue
+
+                                        if sid_usage in (2, 4, 5):
+                                            typ = "Group"
+                                        elif sid_usage in (1, 6, 7):
+                                            typ = "User"
+                                        else:
+                                            typ = "Account"
+
+                                        key = (domain_and_name.lower(), typ, source_group)
+                                        if key in seen:
+                                            continue
+                                        seen.add(key)
+                                        members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
+                                    if not resume:
+                                        break
+                                if fetched_any:
+                                    break
+                            except Exception as le:
+                                level_errors.append("lvl=" + str(lvl) + ": " + _fmt_exc(le))
+                                if "access is denied" not in str(le).lower() and "'5'" not in str(le):
+                                    break
+
+                        if fetched_any:
+                            group_ok = True
+                            break
+
+                        raise RuntimeError("; ".join(level_errors) if level_errors else "no data")
                     except Exception as e:
                         detail = (
                             "server=" + str(server) +
@@ -1888,31 +1918,6 @@ $res | ConvertTo-Json -Compress
                 if not any(current_ports.values()):
                     details.append(target + ": no reachable ports")
                     continue
-
-                if p5985:
-                    for attempt in range(2):
-                        mt0 = time.time()
-                        m, r = self._try_winrm_methods(target, comp_info=comp_info, use_ssl=False)
-                        if m:
-                            method = m
-                            members = r
-                            metrics.add_method_timing(m, time.time() - mt0)
-                            break
-                        if attempt == 0 and r and "timeout" in str(r).lower():
-                            time.sleep(1)
-                            continue
-                        details.append(target + " WinRM: " + str(r)[:200])
-                        break
-
-                if members is None and p5986:
-                    mt0 = time.time()
-                    m, r = self._try_winrm_methods(target, comp_info=comp_info, use_ssl=True)
-                    if m:
-                        method = m
-                        members = r
-                        metrics.add_method_timing(m + "-SSL", time.time() - mt0)
-                    else:
-                        details.append(target + " WinRM-SSL: " + str(r)[:200])
 
             aggregate_ports = {
                 "5985_winrm": False,
@@ -2290,6 +2295,10 @@ $res | ConvertTo-Json -Compress
                     member_via_groups[name].add(via)
                     via_group_counts[via] += 1
 
+                mtype = str(m.get("type", "") or "").strip()
+                if mtype:
+                    member_types[name].add(mtype)
+
                 if not m.get("is_builtin", False):
                     has_nonbuiltin = True
                     nonbuiltin_names.append(name)
@@ -2326,13 +2335,16 @@ $res | ConvertTo-Json -Compress
             # Собираем через какие группы этот аккаунт попал
             via_groups = sorted(member_via_groups.get(name, set()))
 
+            types_for_member = sorted(member_types.get(name, set()))
+            is_group_member = any("group" in t.lower() or "группа" in t.lower() or "nested" in t.lower() for t in types_for_member)
+
             top_admins_list.append({
                 "account": name,
                 "machine_count": len(set(machines)),
                 "is_builtin": is_builtin,
                 "is_local_admin": is_local_admin,
                 "via_group": ", ".join(via_groups) if via_groups else "",
-                "type": "User",  # по умолчанию
+                "type": "Group" if is_group_member else "User",
                 "machines": sorted(set(machines)),
             })
 
@@ -2414,6 +2426,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
     member_to_computers = defaultdict(list)
     member_via_groups = defaultdict(set)
+    member_types = defaultdict(set)
     via_group_counts = defaultdict(int)
     method_counts = defaultdict(int)
     error_types = defaultdict(int)
@@ -2509,6 +2522,10 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
                 member_via_groups[name].add(via)
                 via_group_counts[via] += 1
 
+            mtype = str(m.get("type", "") or "").strip()
+            if mtype:
+                member_types[name].add(mtype)
+
             if not m.get("is_builtin", False):
                 has_nonbuiltin = True
                 nonbuiltin_names.append(name)
@@ -2544,13 +2561,16 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
         via_groups = sorted(member_via_groups.get(name, set()))
 
+        types_for_member = sorted(member_types.get(name, set()))
+        is_group_member = any("group" in t.lower() or "группа" in t.lower() or "nested" in t.lower() for t in types_for_member)
+
         top_admins_list.append({
             "account": name,
             "machine_count": len(set(machines)),
             "is_builtin": is_builtin,
             "is_local_admin": is_local_admin,
             "via_group": ", ".join(via_groups) if via_groups else "",
-            "type": "User",
+            "type": "Group" if is_group_member else "User",
             "machines": sorted(set(machines)),
         })
 
@@ -2790,6 +2810,24 @@ async def start_scan(request: Request):
     cfg = body.get("scan")
     if not cfg:
         return JSONResponse({"error": "Missing config"}, status_code=400)
+
+    # Backward compatibility: allow legacy checkbox payload under scan.groups
+    if "group_targets" not in cfg and isinstance(cfg.get("groups"), dict):
+        groups = cfg.get("groups") or {}
+        group_targets = []
+        if groups.get("administrators"):
+            group_targets.append("S-1-5-32-544")
+        if groups.get("remoteDesktopUsers"):
+            group_targets.append("S-1-5-32-555")
+        if groups.get("distributedComUsers"):
+            group_targets.append("S-1-5-32-562")
+        if groups.get("remoteManagementUsers"):
+            group_targets.append("S-1-5-32-580")
+        cfg["group_targets"] = group_targets
+
+    if isinstance(cfg.get("group_targets"), list) and not cfg.get("group_targets"):
+        return JSONResponse({"error": "Select at least one local group to scan"}, status_code=400)
+
     t = threading.Thread(target=scanner.run, args=(cfg,), daemon=True)
     t.start()
     return {"status": "started"}
