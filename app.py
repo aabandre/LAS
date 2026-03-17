@@ -8,6 +8,7 @@ import threading
 import logging
 import time
 import glob
+import ipaddress
 from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -397,11 +398,43 @@ class Scanner:
         except (socket.error, OSError):
             return False
 
+    def _probe_ports(self, host):
+        p5985 = False
+        p445 = False
+        p3389 = False
+
+        with ThreadPoolExecutor(max_workers=3) as probe_pool:
+            fut5985 = probe_pool.submit(self.port_open, host, 5985, 2.0)
+            fut445 = probe_pool.submit(self.port_open, host, 445, 1.2)
+            fut3389 = probe_pool.submit(self.port_open, host, 3389, 1.2)
+            p5985 = fut5985.result()
+            p445 = fut445.result()
+            p3389 = fut3389.result()
+
+        p5986 = self.port_open(host, 5986, 2.0) if not p5985 else False
+        return {
+            "5985_winrm": p5985,
+            "5986_winrm_ssl": p5986,
+            "445_smb": p445,
+            "3389_rdp": p3389,
+        }
+
     @staticmethod
     def _host_candidates(hostname, ip=None):
+        def _is_ip(value):
+            try:
+                ipaddress.ip_address(str(value or '').strip())
+                return True
+            except ValueError:
+                return False
+
         candidates = []
         seen = set()
-        for candidate in (hostname, ip, str(hostname or '').split('.', 1)[0]):
+
+        host = str(hostname or '').strip()
+        host_short = host.split('.', 1)[0] if host and not _is_ip(host) else ''
+
+        for candidate in (host, host_short, ip):
             val = str(candidate or '').strip()
             key = val.lower()
             if val and key not in seen:
@@ -1692,21 +1725,30 @@ $res | ConvertTo-Json -Compress
             ipc_remote = str(server) + r"\IPC$"
             last_err = ""
             for smb_user in users:
+                ui2 = {
+                    "remote": ipc_remote,
+                    "password": password,
+                    "username": smb_user,
+                    "asg_type": getattr(win32netcon, "USE_WILDCARD", 0),
+                }
                 try:
-                    ui2 = {
-                        "remote": ipc_remote,
-                        "password": password,
-                        "username": smb_user,
-                        "asg_type": win32netcon.USE_WILDCARD,
-                    }
                     win32net.NetUseAdd(None, 2, ui2)
                     connected_shares.add(ipc_remote)
                     return (True, "session user=" + smb_user)
                 except Exception as e1:
-                    last_err = smb_user + ": " + _fmt_exc(e1)
+                    e1_text = _fmt_exc(e1)
+                    last_err = smb_user + ": " + e1_text
+                    # Retry with NetUseDel only when this looks like an existing conflicting session.
+                    if "1219" not in e1_text and "multiple connections" not in e1_text.lower():
+                        continue
                     try:
-                        # Drop conflicting cached session (e.g. different credentials) and retry once.
-                        win32net.NetUseDel(None, ipc_remote, 2)
+                        try:
+                            win32net.NetUseDel(None, ipc_remote, 2)
+                        except Exception as del_err:
+                            del_text = _fmt_exc(del_err).lower()
+                            # 2250 means there was no mapped connection to delete; proceed with retry add.
+                            if "2250" not in del_text and "could not be found" not in del_text:
+                                raise
                         win32net.NetUseAdd(None, 2, ui2)
                         connected_shares.add(ipc_remote)
                         return (True, "session(retry) user=" + smb_user)
@@ -1717,8 +1759,15 @@ $res | ConvertTo-Json -Compress
 
         # IMPORTANT: do not use None here, it points to local machine context.
         # We must query only the remote target host.
-        short = str(computer or "").split(".")[0].strip()
         full = str(computer or "").strip()
+        short = ""
+        try:
+            ipaddress.ip_address(full)
+        except ValueError:
+            short = full.split(".")[0].strip()
+            # Guard against malformed numeric hostnames (e.g. partial IPv4-like labels).
+            if short.replace("-", "").isdigit():
+                short = ""
         for srv in (short, full):
             if not srv:
                 continue
@@ -1897,26 +1946,10 @@ $res | ConvertTo-Json -Compress
             ip = dns_cache.resolve(computer)
             result["ip"] = ip
 
-            host_candidates = self._host_candidates(computer, ip)
+            scan_targets = self._host_candidates(computer, ip)
             members = None
             method = None
             details = []
-            best_ports = None
-
-            for target in targets:
-                p5985 = self.port_open(target, 5985, 2.0)
-                p5986 = self.port_open(target, 5986, 2.0) if not p5985 else False
-                p445 = self.port_open(target, 445, 1.5)
-                p3389 = self.port_open(target, 3389, 1.5)
-                current_ports = {
-                    "5985_winrm": p5985, "5986_winrm_ssl": p5986,
-                    "445_smb": p445, "3389_rdp": p3389,
-                }
-                if best_ports is None or any(current_ports.values()):
-                    best_ports = current_ports
-                if not any(current_ports.values()):
-                    details.append(target + ": no reachable ports")
-                    continue
 
             aggregate_ports = {
                 "5985_winrm": False,
@@ -1925,17 +1958,8 @@ $res | ConvertTo-Json -Compress
                 "3389_rdp": False,
             }
 
-            for idx, candidate in enumerate(host_candidates):
-                p5985 = self.port_open(candidate, 5985, 2.0)
-                p5986 = self.port_open(candidate, 5986, 2.0) if not p5985 else False
-                p445 = self.port_open(candidate, 445, 1.5)
-                p3389 = self.port_open(candidate, 3389, 1.5)
-                ports = {
-                    "5985_winrm": p5985,
-                    "5986_winrm_ssl": p5986,
-                    "445_smb": p445,
-                    "3389_rdp": p3389,
-                }
+            for idx, candidate in enumerate(scan_targets):
+                ports = self._probe_ports(candidate)
                 for key, value in ports.items():
                     aggregate_ports[key] = aggregate_ports[key] or value
 
@@ -2000,6 +2024,8 @@ $res | ConvertTo-Json -Compress
                     msg = "DNS failed"
                 elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and not aggregate_ports["445_smb"] and not aggregate_ports["3389_rdp"]:
                     msg = "Host OFFLINE. IP: " + str(ip)
+                elif any("access is denied" in str(d).lower() or "access denied" in str(d).lower() for d in details):
+                    msg = "Host ALIVE, but access denied for remote enumeration"
                 elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["445_smb"]:
                     msg = "Host ALIVE (SMB), WinRM CLOSED"
                 elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["3389_rdp"]:
@@ -2092,7 +2118,7 @@ $res | ConvertTo-Json -Compress
                 return
 
             # Adaptive threads
-            max_cfg = int(config.get("max_threads", 20))
+            max_cfg = int(config.get("max_threads", 30))
             if self.total < max_cfg:
                 max_w = max(1, self.total)
             else:
@@ -2833,6 +2859,20 @@ async def start_scan(request: Request):
 
     if isinstance(cfg.get("group_targets"), list) and not cfg.get("group_targets"):
         return JSONResponse({"error": "Select at least one local group to scan"}, status_code=400)
+
+    ad_cfg = cfg.get("ad_config") or {}
+    srv_cfg = cfg.get("server_ad_config") or {}
+    work_ou = str(cfg.get("workstations_ou") or "").strip()
+    srv_ou = str(cfg.get("servers_ou") or "").strip()
+
+    if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
+        return JSONResponse({"error": "Missing AD server/username"}, status_code=400)
+
+    if work_ou and not str(ad_cfg.get("password") or "").strip():
+        return JSONResponse({"error": "Workstations OU requires workstation password"}, status_code=400)
+
+    if srv_ou and (not str(srv_cfg.get("username") or "").strip() or not str(srv_cfg.get("password") or "").strip()):
+        return JSONResponse({"error": "Servers OU requires server username/password"}, status_code=400)
 
     t = threading.Thread(target=scanner.run, args=(cfg,), daemon=True)
     t.start()
