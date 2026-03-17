@@ -398,6 +398,27 @@ class Scanner:
         except (socket.error, OSError):
             return False
 
+    def _probe_ports(self, host):
+        p5985 = False
+        p445 = False
+        p3389 = False
+
+        with ThreadPoolExecutor(max_workers=3) as probe_pool:
+            fut5985 = probe_pool.submit(self.port_open, host, 5985, 2.0)
+            fut445 = probe_pool.submit(self.port_open, host, 445, 1.2)
+            fut3389 = probe_pool.submit(self.port_open, host, 3389, 1.2)
+            p5985 = fut5985.result()
+            p445 = fut445.result()
+            p3389 = fut3389.result()
+
+        p5986 = self.port_open(host, 5986, 2.0) if not p5985 else False
+        return {
+            "5985_winrm": p5985,
+            "5986_winrm_ssl": p5986,
+            "445_smb": p445,
+            "3389_rdp": p3389,
+        }
+
     @staticmethod
     def _host_candidates(hostname, ip=None):
         def _is_ip(value):
@@ -1938,6 +1959,9 @@ $res | ConvertTo-Json -Compress
             }
 
             for idx, candidate in enumerate(scan_targets):
+<<<<<<< codex/fix-undefined-variable-error-for-targets-cwomf1
+                ports = self._probe_ports(candidate)
+=======
                 p5985 = self.port_open(candidate, 5985, 2.0)
                 p5986 = self.port_open(candidate, 5986, 2.0) if not p5985 else False
                 p445 = self.port_open(candidate, 445, 1.5)
@@ -1948,6 +1972,7 @@ $res | ConvertTo-Json -Compress
                     "445_smb": p445,
                     "3389_rdp": p3389,
                 }
+>>>>>>> main
                 for key, value in ports.items():
                     aggregate_ports[key] = aggregate_ports[key] or value
 
@@ -2106,7 +2131,7 @@ $res | ConvertTo-Json -Compress
                 return
 
             # Adaptive threads
-            max_cfg = int(config.get("max_threads", 20))
+            max_cfg = int(config.get("max_threads", 30))
             if self.total < max_cfg:
                 max_w = max(1, self.total)
             else:
@@ -2847,6 +2872,20 @@ async def start_scan(request: Request):
 
     if isinstance(cfg.get("group_targets"), list) and not cfg.get("group_targets"):
         return JSONResponse({"error": "Select at least one local group to scan"}, status_code=400)
+
+    ad_cfg = cfg.get("ad_config") or {}
+    srv_cfg = cfg.get("server_ad_config") or {}
+    work_ou = str(cfg.get("workstations_ou") or "").strip()
+    srv_ou = str(cfg.get("servers_ou") or "").strip()
+
+    if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
+        return JSONResponse({"error": "Missing AD server/username"}, status_code=400)
+
+    if work_ou and not str(ad_cfg.get("password") or "").strip():
+        return JSONResponse({"error": "Workstations OU requires workstation password"}, status_code=400)
+
+    if srv_ou and (not str(srv_cfg.get("username") or "").strip() or not str(srv_cfg.get("password") or "").strip()):
+        return JSONResponse({"error": "Servers OU requires server username/password"}, status_code=400)
 
     t = threading.Thread(target=scanner.run, args=(cfg,), daemon=True)
     t.start()
