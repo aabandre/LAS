@@ -2198,6 +2198,7 @@ $res | ConvertTo-Json -Compress
     def _build_summary(self, all_results):
         member_to_computers = defaultdict(list)
         member_via_groups = defaultdict(set)      # НОВОЕ: какие группы привели этого участника
+        member_types = defaultdict(set)           # НОВОЕ: какие типы объектов были у участника
         via_group_counts = defaultdict(int)        # НОВОЕ: сколько раз каждая группа встречается
         method_counts = defaultdict(int)
         error_types = defaultdict(int)
