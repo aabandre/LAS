@@ -448,7 +448,7 @@ class Scanner:
                 members = r
                 metrics.add_method_timing(m, time.time() - mt0)
             else:
-                details.append(str(r)[:200])
+                details.append((str(r).strip() or 'WMI: unknown failure')[:200])
 
         if members is None and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', True)):
             mt0 = time.time()
@@ -1747,29 +1747,22 @@ $res | ConvertTo-Json -Compress
                     logger.debug("RPC-SAMR session open failed for %s via %s: %s", computer, server, session_note)
                 for group_name in aliases:
                     try:
-                        level_errors = []
-                        fetched_any = False
-                        for lvl in (2, 1, 0):
+                        level_ok = False
+                        last_level_err = None
+                        for level in (2, 1):
                             try:
                                 resume = 0
                                 while True:
-                                    data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, lvl, resume, 4096)
-                                    fetched_any = True
+                                    data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, level, resume, 4096)
                                     for item in data:
-                                        if lvl == 2:
-                                            raw_name = item.get("domainandname")
-                                            sid_usage = int(item.get("sidusage", 0) or 0)
-                                        elif lvl == 1:
-                                            raw_name = item.get("name") or item.get("domainandname")
-                                            sid_usage = int(item.get("sidusage", 0) or 0)
+                                        if level == 2:
+                                            account_name = str(item.get("domainandname") or "").strip()
                                         else:
-                                            raw_name = item.get("domainandname") or item.get("name") or item.get("sid")
-                                            sid_usage = int(item.get("sidusage", 0) or 0)
-
-                                        domain_and_name = str(raw_name or "").strip()
-                                        if not domain_and_name:
+                                            account_name = str(item.get("name") or "").strip()
+                                        if not account_name:
                                             continue
 
+                                        sid_usage = int(item.get("sidusage", 0) or 0)
                                         if sid_usage in (2, 4, 5):
                                             typ = "Group"
                                         elif sid_usage in (1, 6, 7):
@@ -1777,25 +1770,23 @@ $res | ConvertTo-Json -Compress
                                         else:
                                             typ = "Account"
 
-                                        key = (domain_and_name.lower(), typ, source_group)
+                                        key = (account_name.lower(), typ, source_group)
                                         if key in seen:
                                             continue
                                         seen.add(key)
-                                        members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
+                                        members.append({"name": account_name, "type": typ, "source_group": source_group})
                                     if not resume:
                                         break
-                                if fetched_any:
-                                    break
-                            except Exception as le:
-                                level_errors.append("lvl=" + str(lvl) + ": " + _fmt_exc(le))
-                                if "access is denied" not in str(le).lower() and "'5'" not in str(le):
-                                    break
+                                level_ok = True
+                                break
+                            except Exception as level_err:
+                                last_level_err = level_err
 
-                        if fetched_any:
-                            group_ok = True
-                            break
+                        if not level_ok and last_level_err is not None:
+                            raise last_level_err
 
-                        raise RuntimeError("; ".join(level_errors) if level_errors else "no data")
+                        group_ok = True
+                        break
                     except Exception as e:
                         detail = (
                             "server=" + str(server) +
