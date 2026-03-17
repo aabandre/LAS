@@ -53,11 +53,13 @@ formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 fh = RotatingFileHandler("scan.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
 fh.setFormatter(formatter)
 fh.setLevel(logging.DEBUG)
-logger.addHandler(fh)
 ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(formatter)
 ch.setLevel(logging.INFO)
-logger.addHandler(ch)
+
+if not logger.handlers:
+    logger.addHandler(fh)
+    logger.addHandler(ch)
 
 
 def apply_runtime_log_settings(debug_enabled=False):
