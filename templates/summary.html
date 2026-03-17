@@ -299,6 +299,8 @@ function val(id){return $(id)?$(id).value:""}
 function getJSON(u,cb){var x=new XMLHttpRequest();x.open("GET",u,true);x.onreadystatechange=function(){if(x.readyState===4){var r=null;try{r=JSON.parse(x.responseText)}catch(e){}cb(x.status,r)}};x.send()}
 function formatSize(b){if(b>1048576)return(b/1048576).toFixed(1)+"MB";if(b>1024)return(b/1024).toFixed(1)+"KB";return b+"B"}
 function isLA(s){return s==="administrator"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440"}
+function isBuiltinName(s){return isLA(s)||s==="administrators"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b"||s==="guests"||s==="\u0433\u043e\u0441\u0442\u0438"}
+function isGroupType(tp){var t=(tp||"").toLowerCase();return t.indexOf("group")>-1||t.indexOf("nested")>-1||t.indexOf("\u0433\u0440\u0443\u043f\u043f")>-1}
 
 getJSON("/api/scans",function(s,data){
     if(!data)return;var sel=$("selScan"),s1=$("selDiff1"),s2=$("selDiff2"),hist=$("historyBody"),hh="";
@@ -347,8 +349,8 @@ function drawPie(cid,lid,obj,colors){var cv=$(cid);if(!cv||!cv.getContext)return
 
 function renderAdmins(){var admins=SD.top_admins||[],html="";
     for(var i=0;i<admins.length;i++){var a=admins[i],lower=(a.account||"").toLowerCase(),short=lower.indexOf("\\")>-1?lower.split("\\")[1]:lower;
-        var isBI=a.is_builtin===true,isLAd=a.hasOwnProperty("is_local_admin")?a.is_local_admin===true:isLA(short);
-        var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=aType.indexOf("Group")>-1||aType.indexOf("nested")>-1;
+        var isBI=a.is_builtin===true||isBuiltinName(short),isLAd=a.hasOwnProperty("is_local_admin")?a.is_local_admin===true:isLA(short);
+        var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=isGroupType(aType);
         var tagT,tagC;if(isLAd){tagT="local-admin";tagC="tag-local-admin"}else if(isGrp){tagT="group";tagC="tag-nested"}else if(isBI){tagT="builtin";tagC="tag-builtin"}else{tagT="custom";tagC="tag-risk"}
         var tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",mList=(a.machines||[]).join(", ");
         html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\">"
@@ -421,7 +423,7 @@ function renderRisky(){var machines=SD.risky_machines||[],details=SD.risky_detai
 function renderClean(){var m=SD.clean_machines||[];$("cleanCount").innerHTML=m.length;var h="";for(var i=0;i<m.length;i++)h+="<div>"+m[i]+"</div>";$("cleanList").innerHTML=h}
 
 function renderHeatmap(){var admins=SD.top_admins||[];if(!admins.length){$("heatmapWrap").innerHTML=t("no_data");return}
-    var filtered=[],fi;for(fi=0;fi<admins.length&&filtered.length<20;fi++){var aa=admins[fi],al=(aa.account||"").toLowerCase(),as=al.indexOf("\\")>-1?al.split("\\")[1]:al;if(!aa.is_builtin&&!isLA(as)&&!(aa.type||"").match(/group/i))filtered.push(aa)}
+    var filtered=[],fi;for(fi=0;fi<admins.length&&filtered.length<20;fi++){var aa=admins[fi],al=(aa.account||"").toLowerCase(),as=al.indexOf("\\")>-1?al.split("\\")[1]:al;if(!(aa.is_builtin===true||isBuiltinName(as))&&!isLA(as)&&!(aa.type||"").match(/group/i))filtered.push(aa)}
     if(!filtered.length)filtered=admins.slice(0,20);
     var allM={},i,j,k;for(i=0;i<filtered.length;i++){var ms=filtered[i].machines||[];for(j=0;j<ms.length;j++)allM[ms[j]]=true}
     var mList=[];for(k in allM)if(allM.hasOwnProperty(k))mList.push(k);mList.sort();if(mList.length>50)mList=mList.slice(0,50);
