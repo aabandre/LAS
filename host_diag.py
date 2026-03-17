@@ -23,26 +23,6 @@ def build_user_candidates(username: str, domain: Optional[str] = None) -> List[s
     return unique
 
 
-def build_host_candidates(host: str, domain: Optional[str] = None) -> List[str]:
-    host = str(host or "").strip()
-    short = host.split(".", 1)[0] if host else ""
-    candidates = [host, short]
-    if domain and short and "." not in short:
-        candidates.append(f"{short}.{domain}")
-
-    unique: List[str] = []
-    seen = set()
-    for candidate in candidates:
-        c = str(candidate or "").strip()
-        if not c:
-            continue
-        key = c.lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(c)
-    return unique
-
-
 def check_port(host: str, port: int, timeout: float = 2.0) -> Tuple[bool, str]:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -143,6 +123,8 @@ def main() -> None:
     parser.add_argument("--domain", default="", help="domain/netbios hint for user format")
     parser.add_argument("--group", default="Administrators", help="local group name for RPC test")
     args = parser.parse_args()
+
+    host_short = args.host.split(".")[0]
 
     host_candidates = build_host_candidates(args.host, args.domain or None)
     print(f"== Host variants: {', '.join(host_candidates)}")

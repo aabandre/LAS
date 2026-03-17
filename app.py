@@ -50,16 +50,30 @@ except ImportError:
 logger = logging.getLogger("scanner")
 logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+
+def _ensure_logger_handler(handler):
+    for existing in logger.handlers:
+        if type(existing) is type(handler):
+            if isinstance(handler, RotatingFileHandler):
+                if getattr(existing, "baseFilename", None) == getattr(handler, "baseFilename", None):
+                    return existing
+            else:
+                if getattr(existing, "stream", None) is getattr(handler, "stream", None):
+                    return existing
+    logger.addHandler(handler)
+    return handler
+
+
 fh = RotatingFileHandler("scan.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
 fh.setFormatter(formatter)
 fh.setLevel(logging.DEBUG)
+fh = _ensure_logger_handler(fh)
+
 ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(formatter)
 ch.setLevel(logging.INFO)
-
-if not logger.handlers:
-    logger.addHandler(fh)
-    logger.addHandler(ch)
+ch = _ensure_logger_handler(ch)
 
 
 def apply_runtime_log_settings(debug_enabled=False):
@@ -383,6 +397,70 @@ class Scanner:
             return True
         except (socket.error, OSError):
             return False
+
+    @staticmethod
+    def _host_candidates(hostname, ip=None):
+        candidates = []
+        seen = set()
+        for candidate in (hostname, ip, str(hostname or '').split('.', 1)[0]):
+            val = str(candidate or '').strip()
+            key = val.lower()
+            if val and key not in seen:
+                seen.add(key)
+                candidates.append(val)
+        return candidates
+
+    def _collect_members_for_target(self, target_host, comp_info, ports):
+        members = None
+        method = None
+        details = []
+
+        if ports.get('5985_winrm'):
+            for attempt in range(2):
+                mt0 = time.time()
+                m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)
+                if m:
+                    method = m
+                    members = r
+                    metrics.add_method_timing(m, time.time() - mt0)
+                    break
+                if attempt == 0 and r and 'timeout' in str(r).lower():
+                    time.sleep(1)
+                    continue
+                details.append('WinRM: ' + str(r)[:200])
+                break
+
+        if members is None and ports.get('5986_winrm_ssl'):
+            mt0 = time.time()
+            m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)
+            if m:
+                method = m
+                members = r
+                metrics.add_method_timing(m + '-SSL', time.time() - mt0)
+            else:
+                details.append('WinRM-SSL: ' + str(r)[:200])
+
+        if members is None:
+            mt0 = time.time()
+            m, r = self._try_wmi(target_host, comp_info=comp_info)
+            if m:
+                method = m
+                members = r
+                metrics.add_method_timing(m, time.time() - mt0)
+            else:
+                details.append(str(r)[:200])
+
+        if members is None and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', True)):
+            mt0 = time.time()
+            m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
+            if m:
+                method = m
+                members = r
+                metrics.add_method_timing(m, time.time() - mt0)
+            else:
+                details.append(str(r)[:200])
+
+        return method, members, details
 
     def ensure_ldap(self):
         if self.ldap_conn and self.ldap_conn.bound:
@@ -1789,8 +1867,8 @@ $res | ConvertTo-Json -Compress
 
             ip = dns_cache.resolve(computer)
             result["ip"] = ip
-            targets = self._build_target_candidates(computer, ip)
 
+            host_candidates = self._host_candidates(computer, ip)
             members = None
             method = None
             details = []
@@ -1836,35 +1914,40 @@ $res | ConvertTo-Json -Compress
                     else:
                         details.append(target + " WinRM-SSL: " + str(r)[:200])
 
-                if members is None:
-                    mt0 = time.time()
-                    m, r = self._try_wmi(target, comp_info=comp_info)
-                    if m:
-                        method = m
-                        members = r
-                        metrics.add_method_timing(m, time.time() - mt0)
-                    else:
-                        details.append(target + " WMI: " + str(r)[:200])
-
-                if members is None and p445 and bool(self.config.get("use_rpc_fallback", True)):
-                    mt0 = time.time()
-                    m, r = self._try_rpc_samr(target, comp_info=comp_info)
-                    if m:
-                        method = m
-                        members = r
-                        metrics.add_method_timing(m, time.time() - mt0)
-                    else:
-                        details.append(target + " RPC-SAMR: " + str(r)[:200])
-
-                if members is not None:
-                    break
-
-            result["ports"] = best_ports or {
+            aggregate_ports = {
                 "5985_winrm": False,
                 "5986_winrm_ssl": False,
                 "445_smb": False,
                 "3389_rdp": False,
             }
+
+            for idx, candidate in enumerate(host_candidates):
+                p5985 = self.port_open(candidate, 5985, 2.0)
+                p5986 = self.port_open(candidate, 5986, 2.0) if not p5985 else False
+                p445 = self.port_open(candidate, 445, 1.5)
+                p3389 = self.port_open(candidate, 3389, 1.5)
+                ports = {
+                    "5985_winrm": p5985,
+                    "5986_winrm_ssl": p5986,
+                    "445_smb": p445,
+                    "3389_rdp": p3389,
+                }
+                for key, value in ports.items():
+                    aggregate_ports[key] = aggregate_ports[key] or value
+
+                if idx == 0:
+                    result["ports"] = ports
+
+                method, members, try_details = self._collect_members_for_target(candidate, comp_info, ports)
+                if members is not None:
+                    if candidate != computer:
+                        result["computer_resolved"] = candidate
+                    break
+
+                if try_details:
+                    details.extend([candidate + ": " + d for d in try_details])
+
+            result["ports"] = aggregate_ports
 
             if members is not None:
                 result["method"] = method
@@ -1905,11 +1988,11 @@ $res | ConvertTo-Json -Compress
                 ports = result["ports"]
                 if not ip:
                     msg = "DNS failed"
-                elif not ports["5985_winrm"] and not ports["5986_winrm_ssl"] and not ports["445_smb"] and not ports["3389_rdp"]:
+                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and not aggregate_ports["445_smb"] and not aggregate_ports["3389_rdp"]:
                     msg = "Host OFFLINE. IP: " + str(ip)
-                elif not ports["5985_winrm"] and not ports["5986_winrm_ssl"] and ports["445_smb"]:
+                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["445_smb"]:
                     msg = "Host ALIVE (SMB), WinRM CLOSED"
-                elif not ports["5985_winrm"] and not ports["5986_winrm_ssl"] and ports["3389_rdp"]:
+                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["3389_rdp"]:
                     msg = "Host ALIVE (RDP), WinRM CLOSED"
                 else:
                     msg = "All methods failed"
