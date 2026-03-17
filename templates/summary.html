@@ -393,7 +393,7 @@ function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineF
         var mds=row.getAttribute("data-machines")||"";
         var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&mf&&mds.indexOf(mf)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;
         row.style.display=show?"":"none";if(show)vis++}$("adminShowing").innerHTML=vis;saveAdminFilters()
-
+}
 
 function renderMachineFilter(){
     var sel=$("machineFilter");if(!sel)return;
