@@ -935,17 +935,15 @@ class Scanner:
 
     def _normalize_group_targets(self):
         selected = self.config.get("group_targets")
-        if not selected:
+        if selected is None:
             return ["S-1-5-32-544"]
 
         normalized = []
         for sid in selected:
             sid_str = str(sid).strip()
-            if sid_str in LOCAL_GROUP_PRESETS:
+            if sid_str in LOCAL_GROUP_PRESETS and sid_str not in normalized:
                 normalized.append(sid_str)
 
-        if not normalized:
-            return ["S-1-5-32-544"]
         return normalized
 
     def _get_local_groups(self):
@@ -1662,14 +1660,21 @@ $res | ConvertTo-Json -Compress
             candidates = []
             if not user_base:
                 return candidates
-            if "\\" in user_base or "@" in user_base:
-                candidates.append(user_base)
-            else:
-                if netbios:
-                    candidates.append(netbios + "\\" + user_base)
-                if domain:
-                    candidates.append(user_base + "@" + domain)
-                candidates.append(user_base)
+
+            base_short = user_base
+            if "\\" in user_base:
+                base_short = user_base.split("\\", 1)[1].strip() or user_base
+            elif "@" in user_base:
+                base_short = user_base.split("@", 1)[0].strip() or user_base
+
+            candidates.append(user_base)
+            if netbios and base_short:
+                candidates.append(netbios + "\\" + base_short)
+            if domain and base_short:
+                candidates.append(base_short + "@" + domain)
+            if base_short:
+                candidates.append(base_short)
+
             uniq = []
             seen = set()
             for cnd in candidates:
@@ -1841,6 +1846,32 @@ $res | ConvertTo-Json -Compress
     def _try_smb_netapi(self, computer, comp_info=None):
         return self._try_rpc_samr(computer, comp_info=comp_info)
 
+    def _build_target_candidates(self, computer, ip=None):
+        candidates = []
+
+        def _add(val):
+            v = str(val or "").strip()
+            if not v:
+                return
+            key = v.lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(v)
+
+        seen = set()
+        host = str(computer or "").strip()
+        short = host.split(".", 1)[0] if host else ""
+
+        _add(host)
+        _add(short)
+
+        domain = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
+        if short and domain and "." not in short:
+            _add(short + "." + domain)
+
+        _add(ip)
+        return candidates
+
     def scan_machine(self, comp_info):
         computer = comp_info["hostname"]
         os_name = comp_info.get("os", "")
@@ -1862,6 +1893,22 @@ $res | ConvertTo-Json -Compress
             members = None
             method = None
             details = []
+            best_ports = None
+
+            for target in targets:
+                p5985 = self.port_open(target, 5985, 2.0)
+                p5986 = self.port_open(target, 5986, 2.0) if not p5985 else False
+                p445 = self.port_open(target, 445, 1.5)
+                p3389 = self.port_open(target, 3389, 1.5)
+                current_ports = {
+                    "5985_winrm": p5985, "5986_winrm_ssl": p5986,
+                    "445_smb": p445, "3389_rdp": p3389,
+                }
+                if best_ports is None or any(current_ports.values()):
+                    best_ports = current_ports
+                if not any(current_ports.values()):
+                    details.append(target + ": no reachable ports")
+                    continue
 
             aggregate_ports = {
                 "5985_winrm": False,
@@ -1922,7 +1969,6 @@ $res | ConvertTo-Json -Compress
                     self.config.get("domain_aliases", []),
                 )
 
-                # Разворачиваем доменные группы
                 try:
                     if self.config.get("expand_groups", True):
                         classified = self._expand_domain_groups(classified)
@@ -1932,10 +1978,10 @@ $res | ConvertTo-Json -Compress
                 result["members"] = classified
                 self._add_members(len(result["members"]))
 
-                # Risk scoring
                 allowed = set(self.config.get("allowed_admins", []))
                 result["risk"] = calc_risk_score(result["members"], allowed)
             else:
+                ports = result["ports"]
                 if not ip:
                     msg = "DNS failed"
                 elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and not aggregate_ports["445_smb"] and not aggregate_ports["3389_rdp"]:
@@ -2143,6 +2189,7 @@ $res | ConvertTo-Json -Compress
     def _build_summary(self, all_results):
         member_to_computers = defaultdict(list)
         member_via_groups = defaultdict(set)      # НОВОЕ: какие группы привели этого участника
+        member_types = defaultdict(set)           # НОВОЕ: какие типы объектов были у участника
         via_group_counts = defaultdict(int)        # НОВОЕ: сколько раз каждая группа встречается
         method_counts = defaultdict(int)
         error_types = defaultdict(int)
@@ -2240,6 +2287,10 @@ $res | ConvertTo-Json -Compress
                     member_via_groups[name].add(via)
                     via_group_counts[via] += 1
 
+                mtype = str(m.get("type", "") or "").strip()
+                if mtype:
+                    member_types[name].add(mtype)
+
                 if not m.get("is_builtin", False):
                     has_nonbuiltin = True
                     nonbuiltin_names.append(name)
@@ -2276,13 +2327,16 @@ $res | ConvertTo-Json -Compress
             # Собираем через какие группы этот аккаунт попал
             via_groups = sorted(member_via_groups.get(name, set()))
 
+            types_for_member = sorted(member_types.get(name, set()))
+            is_group_member = any("group" in t.lower() or "группа" in t.lower() or "nested" in t.lower() for t in types_for_member)
+
             top_admins_list.append({
                 "account": name,
                 "machine_count": len(set(machines)),
                 "is_builtin": is_builtin,
                 "is_local_admin": is_local_admin,
                 "via_group": ", ".join(via_groups) if via_groups else "",
-                "type": "User",  # по умолчанию
+                "type": "Group" if is_group_member else "User",
                 "machines": sorted(set(machines)),
             })
 
@@ -2364,6 +2418,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
     member_to_computers = defaultdict(list)
     member_via_groups = defaultdict(set)
+    member_types = defaultdict(set)
     via_group_counts = defaultdict(int)
     method_counts = defaultdict(int)
     error_types = defaultdict(int)
@@ -2459,6 +2514,10 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
                 member_via_groups[name].add(via)
                 via_group_counts[via] += 1
 
+            mtype = str(m.get("type", "") or "").strip()
+            if mtype:
+                member_types[name].add(mtype)
+
             if not m.get("is_builtin", False):
                 has_nonbuiltin = True
                 nonbuiltin_names.append(name)
@@ -2494,13 +2553,16 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
         via_groups = sorted(member_via_groups.get(name, set()))
 
+        types_for_member = sorted(member_types.get(name, set()))
+        is_group_member = any("group" in t.lower() or "группа" in t.lower() or "nested" in t.lower() for t in types_for_member)
+
         top_admins_list.append({
             "account": name,
             "machine_count": len(set(machines)),
             "is_builtin": is_builtin,
             "is_local_admin": is_local_admin,
             "via_group": ", ".join(via_groups) if via_groups else "",
-            "type": "User",
+            "type": "Group" if is_group_member else "User",
             "machines": sorted(set(machines)),
         })
 
@@ -2740,6 +2802,24 @@ async def start_scan(request: Request):
     cfg = body.get("scan")
     if not cfg:
         return JSONResponse({"error": "Missing config"}, status_code=400)
+
+    # Backward compatibility: allow legacy checkbox payload under scan.groups
+    if "group_targets" not in cfg and isinstance(cfg.get("groups"), dict):
+        groups = cfg.get("groups") or {}
+        group_targets = []
+        if groups.get("administrators"):
+            group_targets.append("S-1-5-32-544")
+        if groups.get("remoteDesktopUsers"):
+            group_targets.append("S-1-5-32-555")
+        if groups.get("distributedComUsers"):
+            group_targets.append("S-1-5-32-562")
+        if groups.get("remoteManagementUsers"):
+            group_targets.append("S-1-5-32-580")
+        cfg["group_targets"] = group_targets
+
+    if isinstance(cfg.get("group_targets"), list) and not cfg.get("group_targets"):
+        return JSONResponse({"error": "Select at least one local group to scan"}, status_code=400)
+
     t = threading.Thread(target=scanner.run, args=(cfg,), daemon=True)
     t.start()
     return {"status": "started"}
