@@ -1855,6 +1855,32 @@ $res | ConvertTo-Json -Compress
     def _try_smb_netapi(self, computer, comp_info=None):
         return self._try_rpc_samr(computer, comp_info=comp_info)
 
+    def _build_target_candidates(self, computer, ip=None):
+        candidates = []
+
+        def _add(val):
+            v = str(val or "").strip()
+            if not v:
+                return
+            key = v.lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(v)
+
+        seen = set()
+        host = str(computer or "").strip()
+        short = host.split(".", 1)[0] if host else ""
+
+        _add(host)
+        _add(short)
+
+        domain = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
+        if short and domain and "." not in short:
+            _add(short + "." + domain)
+
+        _add(ip)
+        return candidates
+
     def scan_machine(self, comp_info):
         computer = comp_info["hostname"]
         os_name = comp_info.get("os", "")
@@ -1876,6 +1902,22 @@ $res | ConvertTo-Json -Compress
             members = None
             method = None
             details = []
+            best_ports = None
+
+            for target in targets:
+                p5985 = self.port_open(target, 5985, 2.0)
+                p5986 = self.port_open(target, 5986, 2.0) if not p5985 else False
+                p445 = self.port_open(target, 445, 1.5)
+                p3389 = self.port_open(target, 3389, 1.5)
+                current_ports = {
+                    "5985_winrm": p5985, "5986_winrm_ssl": p5986,
+                    "445_smb": p445, "3389_rdp": p3389,
+                }
+                if best_ports is None or any(current_ports.values()):
+                    best_ports = current_ports
+                if not any(current_ports.values()):
+                    details.append(target + ": no reachable ports")
+                    continue
 
             aggregate_ports = {
                 "5985_winrm": False,
@@ -1945,7 +1987,6 @@ $res | ConvertTo-Json -Compress
                     self.config.get("domain_aliases", []),
                 )
 
-                # Разворачиваем доменные группы
                 try:
                     if self.config.get("expand_groups", True):
                         classified = self._expand_domain_groups(classified)
@@ -1955,10 +1996,10 @@ $res | ConvertTo-Json -Compress
                 result["members"] = classified
                 self._add_members(len(result["members"]))
 
-                # Risk scoring
                 allowed = set(self.config.get("allowed_admins", []))
                 result["risk"] = calc_risk_score(result["members"], allowed)
             else:
+                ports = result["ports"]
                 if not ip:
                     msg = "DNS failed"
                 elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and not aggregate_ports["445_smb"] and not aggregate_ports["3389_rdp"]:
