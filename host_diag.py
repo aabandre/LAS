@@ -96,7 +96,7 @@ def try_rpc_samr(host: str, username: str, password: str, domain: Optional[str] 
             resume = 0
             members = []
             while True:
-                data, total, resume = win32net.NetLocalGroupGetMembers(server, group, 2, resume, 4096)
+                data, _total, resume = win32net.NetLocalGroupGetMembers(server, group, 2, resume, 4096)
                 for item in data:
                     domain_and_name = str(item.get("domainandname") or "").strip()
                     if domain_and_name:
@@ -126,17 +126,20 @@ def main() -> None:
 
     host_short = args.host.split(".")[0]
 
-    print(f"== Host: {args.host} (short={host_short})")
+    host_candidates = build_host_candidates(args.host, args.domain or None)
+    print(f"== Host variants: {', '.join(host_candidates)}")
 
-    for port in (135, 139, 445, 5985, 5986):
-        ok, msg = check_port(args.host, port)
-        print(f"PORT {port}: {'OPEN' if ok else 'CLOSED'} ({msg})")
+    for host in host_candidates:
+        print(f"\n-- Testing target: {host}")
+        for port in (135, 139, 445, 5985, 5986):
+            ok, msg = check_port(host, port)
+            print(f"PORT {port}: {'OPEN' if ok else 'CLOSED'} ({msg})")
 
-    ok_wmi, msg_wmi = try_wmi(args.host, args.user, args.password, args.domain or None)
-    print(f"WMI: {'OK' if ok_wmi else 'FAIL'} | {msg_wmi}")
+        ok_wmi, msg_wmi = try_wmi(host, args.user, args.password, args.domain or None)
+        print(f"WMI: {'OK' if ok_wmi else 'FAIL'} | {msg_wmi}")
 
-    ok_rpc, msg_rpc = try_rpc_samr(host_short, args.user, args.password, args.domain or None, args.group)
-    print(f"RPC-SAMR: {'OK' if ok_rpc else 'FAIL'} | {msg_rpc}")
+        ok_rpc, msg_rpc = try_rpc_samr(host, args.user, args.password, args.domain or None, args.group)
+        print(f"RPC-SAMR: {'OK' if ok_rpc else 'FAIL'} | {msg_rpc}")
 
 
 if __name__ == "__main__":
