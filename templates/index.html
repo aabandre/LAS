@@ -330,6 +330,17 @@ function getJSON(url, cb){
     x.send()
 }
 
+
+function asBool(v, defVal){
+    if(v === undefined || v === null) return !!defVal;
+    if(typeof v === "boolean") return v;
+    if(typeof v === "string"){
+        var z=v.toLowerCase().trim();
+        if(z==="true"||z==="1"||z==="yes"||z==="on") return true;
+        if(z==="false"||z==="0"||z==="no"||z==="off"||z==="") return false;
+    }
+    return !!v;
+}
 function formatETA(sec){
     if(!sec || sec <= 0) return "-";
     var m = Math.floor(sec / 60), s = sec % 60;
@@ -380,13 +391,13 @@ function applySettings(d){
     if(d.allowed) $("cfgAllowed").value=d.allowed;
     if(d.domainAliases) $("cfgDomainAliases").value=d.domainAliases;
     if(d.groups){
-        if(d.groups.hasOwnProperty("administrators")) $("grpAdministrators").checked=!!d.groups.administrators;
-        if(d.groups.hasOwnProperty("remoteDesktopUsers")) $("grpRdp").checked=!!d.groups.remoteDesktopUsers;
-        if(d.groups.hasOwnProperty("distributedComUsers")) $("grpDcom").checked=!!d.groups.distributedComUsers;
-        if(d.groups.hasOwnProperty("remoteManagementUsers")) $("grpWinRm").checked=!!d.groups.remoteManagementUsers;
+        if(d.groups.hasOwnProperty("administrators")) $("grpAdministrators").checked=asBool(d.groups.administrators, true);
+        if(d.groups.hasOwnProperty("remoteDesktopUsers")) $("grpRdp").checked=asBool(d.groups.remoteDesktopUsers, false);
+        if(d.groups.hasOwnProperty("distributedComUsers")) $("grpDcom").checked=asBool(d.groups.distributedComUsers, false);
+        if(d.groups.hasOwnProperty("remoteManagementUsers")) $("grpWinRm").checked=asBool(d.groups.remoteManagementUsers, false);
     }
-    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=d.expand;
-    if(d.hasOwnProperty("debugLog")) $("cfgDebugLog").checked=!!d.debugLog
+    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=asBool(d.expand, true);
+    if(d.hasOwnProperty("debugLog")) $("cfgDebugLog").checked=asBool(d.debugLog, false)
 }
 
 try{
@@ -417,7 +428,7 @@ function doStart(){
     if($("grpRdp").checked) groupTargets.push("S-1-5-32-555");
     if($("grpDcom").checked) groupTargets.push("S-1-5-32-562");
     if($("grpWinRm").checked) groupTargets.push("S-1-5-32-580");
-    if(!groupTargets.length) groupTargets.push("S-1-5-32-544");
+    if(!groupTargets.length){ alert("Select at least one local group to scan"); return; }
 
     var config={scan:{
         ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:val("cfgUser"),password:val("cfgPass")},

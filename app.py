@@ -50,14 +50,30 @@ except ImportError:
 logger = logging.getLogger("scanner")
 logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+
+def _ensure_logger_handler(handler):
+    for existing in logger.handlers:
+        if type(existing) is type(handler):
+            if isinstance(handler, RotatingFileHandler):
+                if getattr(existing, "baseFilename", None) == getattr(handler, "baseFilename", None):
+                    return existing
+            else:
+                if getattr(existing, "stream", None) is getattr(handler, "stream", None):
+                    return existing
+    logger.addHandler(handler)
+    return handler
+
+
 fh = RotatingFileHandler("scan.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
 fh.setFormatter(formatter)
 fh.setLevel(logging.DEBUG)
-logger.addHandler(fh)
+fh = _ensure_logger_handler(fh)
+
 ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(formatter)
 ch.setLevel(logging.INFO)
-logger.addHandler(ch)
+ch = _ensure_logger_handler(ch)
 
 
 def apply_runtime_log_settings(debug_enabled=False):
@@ -381,6 +397,70 @@ class Scanner:
             return True
         except (socket.error, OSError):
             return False
+
+    @staticmethod
+    def _host_candidates(hostname, ip=None):
+        candidates = []
+        seen = set()
+        for candidate in (hostname, ip, str(hostname or '').split('.', 1)[0]):
+            val = str(candidate or '').strip()
+            key = val.lower()
+            if val and key not in seen:
+                seen.add(key)
+                candidates.append(val)
+        return candidates
+
+    def _collect_members_for_target(self, target_host, comp_info, ports):
+        members = None
+        method = None
+        details = []
+
+        if ports.get('5985_winrm'):
+            for attempt in range(2):
+                mt0 = time.time()
+                m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)
+                if m:
+                    method = m
+                    members = r
+                    metrics.add_method_timing(m, time.time() - mt0)
+                    break
+                if attempt == 0 and r and 'timeout' in str(r).lower():
+                    time.sleep(1)
+                    continue
+                details.append('WinRM: ' + str(r)[:200])
+                break
+
+        if members is None and ports.get('5986_winrm_ssl'):
+            mt0 = time.time()
+            m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)
+            if m:
+                method = m
+                members = r
+                metrics.add_method_timing(m + '-SSL', time.time() - mt0)
+            else:
+                details.append('WinRM-SSL: ' + str(r)[:200])
+
+        if members is None:
+            mt0 = time.time()
+            m, r = self._try_wmi(target_host, comp_info=comp_info)
+            if m:
+                method = m
+                members = r
+                metrics.add_method_timing(m, time.time() - mt0)
+            else:
+                details.append(str(r)[:200])
+
+        if members is None and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', True)):
+            mt0 = time.time()
+            m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
+            if m:
+                method = m
+                members = r
+                metrics.add_method_timing(m, time.time() - mt0)
+            else:
+                details.append(str(r)[:200])
+
+        return method, members, details
 
     def ensure_ldap(self):
         if self.ldap_conn and self.ldap_conn.bound:
@@ -855,17 +935,15 @@ class Scanner:
 
     def _normalize_group_targets(self):
         selected = self.config.get("group_targets")
-        if not selected:
+        if selected is None:
             return ["S-1-5-32-544"]
 
         normalized = []
         for sid in selected:
             sid_str = str(sid).strip()
-            if sid_str in LOCAL_GROUP_PRESETS:
+            if sid_str in LOCAL_GROUP_PRESETS and sid_str not in normalized:
                 normalized.append(sid_str)
 
-        if not normalized:
-            return ["S-1-5-32-544"]
         return normalized
 
     def _get_local_groups(self):
@@ -1582,14 +1660,21 @@ $res | ConvertTo-Json -Compress
             candidates = []
             if not user_base:
                 return candidates
-            if "\\" in user_base or "@" in user_base:
-                candidates.append(user_base)
-            else:
-                if netbios:
-                    candidates.append(netbios + "\\" + user_base)
-                if domain:
-                    candidates.append(user_base + "@" + domain)
-                candidates.append(user_base)
+
+            base_short = user_base
+            if "\\" in user_base:
+                base_short = user_base.split("\\", 1)[1].strip() or user_base
+            elif "@" in user_base:
+                base_short = user_base.split("@", 1)[0].strip() or user_base
+
+            candidates.append(user_base)
+            if netbios and base_short:
+                candidates.append(netbios + "\\" + base_short)
+            if domain and base_short:
+                candidates.append(base_short + "@" + domain)
+            if base_short:
+                candidates.append(base_short)
+
             uniq = []
             seen = set()
             for cnd in candidates:
@@ -1662,30 +1747,55 @@ $res | ConvertTo-Json -Compress
                     logger.debug("RPC-SAMR session open failed for %s via %s: %s", computer, server, session_note)
                 for group_name in aliases:
                     try:
-                        resume = 0
-                        while True:
-                            data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, 2, resume, 4096)
-                            for item in data:
-                                domain_and_name = str(item.get("domainandname") or "").strip()
-                                if not domain_and_name:
-                                    continue
-                                sid_usage = int(item.get("sidusage", 0) or 0)
-                                if sid_usage in (2, 4, 5):
-                                    typ = "Group"
-                                elif sid_usage in (1, 6, 7):
-                                    typ = "User"
-                                else:
-                                    typ = "Account"
+                        level_errors = []
+                        fetched_any = False
+                        for lvl in (2, 1, 0):
+                            try:
+                                resume = 0
+                                while True:
+                                    data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, lvl, resume, 4096)
+                                    fetched_any = True
+                                    for item in data:
+                                        if lvl == 2:
+                                            raw_name = item.get("domainandname")
+                                            sid_usage = int(item.get("sidusage", 0) or 0)
+                                        elif lvl == 1:
+                                            raw_name = item.get("name") or item.get("domainandname")
+                                            sid_usage = int(item.get("sidusage", 0) or 0)
+                                        else:
+                                            raw_name = item.get("domainandname") or item.get("name") or item.get("sid")
+                                            sid_usage = int(item.get("sidusage", 0) or 0)
 
-                                key = (domain_and_name.lower(), typ, source_group)
-                                if key in seen:
-                                    continue
-                                seen.add(key)
-                                members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
-                            if not resume:
-                                break
-                        group_ok = True
-                        break
+                                        domain_and_name = str(raw_name or "").strip()
+                                        if not domain_and_name:
+                                            continue
+
+                                        if sid_usage in (2, 4, 5):
+                                            typ = "Group"
+                                        elif sid_usage in (1, 6, 7):
+                                            typ = "User"
+                                        else:
+                                            typ = "Account"
+
+                                        key = (domain_and_name.lower(), typ, source_group)
+                                        if key in seen:
+                                            continue
+                                        seen.add(key)
+                                        members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
+                                    if not resume:
+                                        break
+                                if fetched_any:
+                                    break
+                            except Exception as le:
+                                level_errors.append("lvl=" + str(lvl) + ": " + _fmt_exc(le))
+                                if "access is denied" not in str(le).lower() and "'5'" not in str(le):
+                                    break
+
+                        if fetched_any:
+                            group_ok = True
+                            break
+
+                        raise RuntimeError("; ".join(level_errors) if level_errors else "no data")
                     except Exception as e:
                         detail = (
                             "server=" + str(server) +
@@ -1761,66 +1871,46 @@ $res | ConvertTo-Json -Compress
 
             ip = dns_cache.resolve(computer)
             result["ip"] = ip
-            target = ip if ip else computer
 
-            p5985 = self.port_open(target, 5985, 2.0)
-            p5986 = self.port_open(target, 5986, 2.0) if not p5985 else False
-            p445 = self.port_open(target, 445, 1.5)
-            p3389 = self.port_open(target, 3389, 1.5)
-            result["ports"] = {
-                "5985_winrm": p5985, "5986_winrm_ssl": p5986,
-                "445_smb": p445, "3389_rdp": p3389,
-            }
-
+            host_candidates = self._host_candidates(computer, ip)
             members = None
             method = None
             details = []
 
-            if p5985:
-                for attempt in range(2):
-                    mt0 = time.time()
-                    m, r = self._try_winrm_methods(computer, comp_info=comp_info, use_ssl=False)
-                    if m:
-                        method = m
-                        members = r
-                        metrics.add_method_timing(m, time.time() - mt0)
-                        break
-                    else:
-                        if attempt == 0 and r and "timeout" in str(r).lower():
-                            time.sleep(1)
-                            continue
-                        details.append("WinRM: " + str(r)[:200])
-                        break
+            aggregate_ports = {
+                "5985_winrm": False,
+                "5986_winrm_ssl": False,
+                "445_smb": False,
+                "3389_rdp": False,
+            }
 
-            if members is None and p5986:
-                mt0 = time.time()
-                m, r = self._try_winrm_methods(computer, comp_info=comp_info, use_ssl=True)
-                if m:
-                    method = m
-                    members = r
-                    metrics.add_method_timing(m + "-SSL", time.time() - mt0)
-                else:
-                    details.append("WinRM-SSL: " + str(r)[:200])
+            for idx, candidate in enumerate(host_candidates):
+                p5985 = self.port_open(candidate, 5985, 2.0)
+                p5986 = self.port_open(candidate, 5986, 2.0) if not p5985 else False
+                p445 = self.port_open(candidate, 445, 1.5)
+                p3389 = self.port_open(candidate, 3389, 1.5)
+                ports = {
+                    "5985_winrm": p5985,
+                    "5986_winrm_ssl": p5986,
+                    "445_smb": p445,
+                    "3389_rdp": p3389,
+                }
+                for key, value in ports.items():
+                    aggregate_ports[key] = aggregate_ports[key] or value
 
-            if members is None:
-                mt0 = time.time()
-                m, r = self._try_wmi(computer, comp_info=comp_info)
-                if m:
-                    method = m
-                    members = r
-                    metrics.add_method_timing(m, time.time() - mt0)
-                else:
-                    details.append(str(r)[:200])
+                if idx == 0:
+                    result["ports"] = ports
 
-            if members is None and p445 and bool(self.config.get("use_rpc_fallback", True)):
-                mt0 = time.time()
-                m, r = self._try_rpc_samr(computer, comp_info=comp_info)
-                if m:
-                    method = m
-                    members = r
-                    metrics.add_method_timing(m, time.time() - mt0)
-                else:
-                    details.append(str(r)[:200])
+                method, members, try_details = self._collect_members_for_target(candidate, comp_info, ports)
+                if members is not None:
+                    if candidate != computer:
+                        result["computer_resolved"] = candidate
+                    break
+
+                if try_details:
+                    details.extend([candidate + ": " + d for d in try_details])
+
+            result["ports"] = aggregate_ports
 
             if members is not None:
                 result["method"] = method
@@ -1862,11 +1952,11 @@ $res | ConvertTo-Json -Compress
             else:
                 if not ip:
                     msg = "DNS failed"
-                elif not p5985 and not p5986 and not p445 and not p3389:
+                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and not aggregate_ports["445_smb"] and not aggregate_ports["3389_rdp"]:
                     msg = "Host OFFLINE. IP: " + str(ip)
-                elif not p5985 and not p5986 and p445:
+                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["445_smb"]:
                     msg = "Host ALIVE (SMB), WinRM CLOSED"
-                elif not p5985 and not p5986 and p3389:
+                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["3389_rdp"]:
                     msg = "Host ALIVE (RDP), WinRM CLOSED"
                 else:
                     msg = "All methods failed"
@@ -2067,6 +2157,7 @@ $res | ConvertTo-Json -Compress
     def _build_summary(self, all_results):
         member_to_computers = defaultdict(list)
         member_via_groups = defaultdict(set)      # НОВОЕ: какие группы привели этого участника
+        member_types = defaultdict(set)           # НОВОЕ: какие типы объектов были у участника
         via_group_counts = defaultdict(int)        # НОВОЕ: сколько раз каждая группа встречается
         method_counts = defaultdict(int)
         error_types = defaultdict(int)
@@ -2164,6 +2255,10 @@ $res | ConvertTo-Json -Compress
                     member_via_groups[name].add(via)
                     via_group_counts[via] += 1
 
+                mtype = str(m.get("type", "") or "").strip()
+                if mtype:
+                    member_types[name].add(mtype)
+
                 if not m.get("is_builtin", False):
                     has_nonbuiltin = True
                     nonbuiltin_names.append(name)
@@ -2200,13 +2295,16 @@ $res | ConvertTo-Json -Compress
             # Собираем через какие группы этот аккаунт попал
             via_groups = sorted(member_via_groups.get(name, set()))
 
+            types_for_member = sorted(member_types.get(name, set()))
+            is_group_member = any("group" in t.lower() or "группа" in t.lower() or "nested" in t.lower() for t in types_for_member)
+
             top_admins_list.append({
                 "account": name,
                 "machine_count": len(set(machines)),
                 "is_builtin": is_builtin,
                 "is_local_admin": is_local_admin,
                 "via_group": ", ".join(via_groups) if via_groups else "",
-                "type": "User",  # по умолчанию
+                "type": "Group" if is_group_member else "User",
                 "machines": sorted(set(machines)),
             })
 
@@ -2288,6 +2386,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
     member_to_computers = defaultdict(list)
     member_via_groups = defaultdict(set)
+    member_types = defaultdict(set)
     via_group_counts = defaultdict(int)
     method_counts = defaultdict(int)
     error_types = defaultdict(int)
@@ -2383,6 +2482,10 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
                 member_via_groups[name].add(via)
                 via_group_counts[via] += 1
 
+            mtype = str(m.get("type", "") or "").strip()
+            if mtype:
+                member_types[name].add(mtype)
+
             if not m.get("is_builtin", False):
                 has_nonbuiltin = True
                 nonbuiltin_names.append(name)
@@ -2418,13 +2521,16 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
 
         via_groups = sorted(member_via_groups.get(name, set()))
 
+        types_for_member = sorted(member_types.get(name, set()))
+        is_group_member = any("group" in t.lower() or "группа" in t.lower() or "nested" in t.lower() for t in types_for_member)
+
         top_admins_list.append({
             "account": name,
             "machine_count": len(set(machines)),
             "is_builtin": is_builtin,
             "is_local_admin": is_local_admin,
             "via_group": ", ".join(via_groups) if via_groups else "",
-            "type": "User",
+            "type": "Group" if is_group_member else "User",
             "machines": sorted(set(machines)),
         })
 
@@ -2664,6 +2770,24 @@ async def start_scan(request: Request):
     cfg = body.get("scan")
     if not cfg:
         return JSONResponse({"error": "Missing config"}, status_code=400)
+
+    # Backward compatibility: allow legacy checkbox payload under scan.groups
+    if "group_targets" not in cfg and isinstance(cfg.get("groups"), dict):
+        groups = cfg.get("groups") or {}
+        group_targets = []
+        if groups.get("administrators"):
+            group_targets.append("S-1-5-32-544")
+        if groups.get("remoteDesktopUsers"):
+            group_targets.append("S-1-5-32-555")
+        if groups.get("distributedComUsers"):
+            group_targets.append("S-1-5-32-562")
+        if groups.get("remoteManagementUsers"):
+            group_targets.append("S-1-5-32-580")
+        cfg["group_targets"] = group_targets
+
+    if isinstance(cfg.get("group_targets"), list) and not cfg.get("group_targets"):
+        return JSONResponse({"error": "Select at least one local group to scan"}, status_code=400)
+
     t = threading.Thread(target=scanner.run, args=(cfg,), daemon=True)
     t.start()
     return {"status": "started"}
