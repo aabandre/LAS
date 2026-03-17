@@ -1959,7 +1959,20 @@ $res | ConvertTo-Json -Compress
             }
 
             for idx, candidate in enumerate(scan_targets):
+<<<<<<< codex/fix-undefined-variable-error-for-targets-cwomf1
                 ports = self._probe_ports(candidate)
+=======
+                p5985 = self.port_open(candidate, 5985, 2.0)
+                p5986 = self.port_open(candidate, 5986, 2.0) if not p5985 else False
+                p445 = self.port_open(candidate, 445, 1.5)
+                p3389 = self.port_open(candidate, 3389, 1.5)
+                ports = {
+                    "5985_winrm": p5985,
+                    "5986_winrm_ssl": p5986,
+                    "445_smb": p445,
+                    "3389_rdp": p3389,
+                }
+>>>>>>> main
                 for key, value in ports.items():
                     aggregate_ports[key] = aggregate_ports[key] or value
 
