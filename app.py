@@ -1901,22 +1901,6 @@ $res | ConvertTo-Json -Compress
             members = None
             method = None
             details = []
-            best_ports = None
-
-            for target in targets:
-                p5985 = self.port_open(target, 5985, 2.0)
-                p5986 = self.port_open(target, 5986, 2.0) if not p5985 else False
-                p445 = self.port_open(target, 445, 1.5)
-                p3389 = self.port_open(target, 3389, 1.5)
-                current_ports = {
-                    "5985_winrm": p5985, "5986_winrm_ssl": p5986,
-                    "445_smb": p445, "3389_rdp": p3389,
-                }
-                if best_ports is None or any(current_ports.values()):
-                    best_ports = current_ports
-                if not any(current_ports.values()):
-                    details.append(target + ": no reachable ports")
-                    continue
 
             aggregate_ports = {
                 "5985_winrm": False,
