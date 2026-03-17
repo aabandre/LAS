@@ -8,7 +8,6 @@ import threading
 import logging
 import time
 import glob
-import hashlib
 from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1947,11 +1946,8 @@ $res | ConvertTo-Json -Compress
                     method, members, try_details = self._collect_members_for_target(candidate, comp_info, ports)
                 except NameError as ne:
                     # Defensive compatibility: prevent one buggy strategy from breaking the whole host scan.
-                    if "targets" in str(ne):
-                        logger.exception("Internal NameError while scanning %s via %s: %s", computer, candidate, ne)
-                        method, members, try_details = (None, None, ["Internal scanner error recovered: " + str(ne)])
-                    else:
-                        raise
+                    logger.exception("Internal NameError while scanning %s via %s: %s", computer, candidate, ne)
+                    method, members, try_details = (None, None, ["Internal scanner error recovered: " + str(ne)])
 
                 if members is not None:
                     if candidate != computer:
