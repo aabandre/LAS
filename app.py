@@ -1977,7 +1977,7 @@ $res | ConvertTo-Json -Compress
 
             ip = dns_cache.resolve(computer)
             result["ip"] = ip
-            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 120, minimum=20, maximum=900)
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 300, minimum=60, maximum=1800)
 
             scan_targets = self._host_candidates(computer, ip)
             members = None
@@ -2168,9 +2168,10 @@ $res | ConvertTo-Json -Compress
             for c in unique:
                 futs[self.executor.submit(self.scan_machine, c)] = c["hostname"]
 
-            per_host_guard = self._cfg_int("host_hard_timeout_sec", 120, minimum=20, maximum=900) + 20
+            per_host_guard = self._cfg_int("host_hard_timeout_sec", 300, minimum=60, maximum=1800) + 60
             pending = set(futs.keys())
             started_at = {fut: time.time() for fut in pending}
+            warned_overdue = set()
 
             while pending and not self.cancelled:
                 done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
@@ -2216,35 +2217,14 @@ $res | ConvertTo-Json -Compress
                         self._inc_progress()
 
                 now = time.time()
-                overdue = []
                 for fut in pending:
-                    if now - started_at.get(fut, now) > per_host_guard:
-                        overdue.append(fut)
-
-                for fut in overdue:
-                    host = futs.get(fut, "(unknown)")
-                    fut.cancel()
-                    pending.discard(fut)
-                    self._inc_progress()
-                    self._inc_errors()
-                    synthetic = {
-                        "computer": host,
-                        "os": "",
-                        "method": None,
-                        "members": [],
-                        "error": "Host scan timeout exceeded guard limit",
-                        "ip": None,
-                        "ports": {},
-                        "scan_time_sec": round(per_host_guard, 2),
-                        "risk": None,
-                    }
-                    all_results.append(synthetic)
-                    self.result_queue.put({"type": "machine", "data": synthetic})
-                    cw.writerow([
-                        host, "", "", "", "", "", "",
-                        synthetic["scan_time_sec"], "", "", "{}", synthetic["error"],
-                    ])
-                    logger.warning("Host timed out by guard limit: %s", host)
+                    if now - started_at.get(fut, now) > per_host_guard and fut not in warned_overdue:
+                        warned_overdue.add(fut)
+                        host = futs.get(fut, "(unknown)")
+                        logger.warning(
+                            "Host is running longer than guard limit but still waiting for real result: %s",
+                            host,
+                        )
 
             metrics.finish(self.total)
 
