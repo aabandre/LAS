@@ -11,7 +11,7 @@ import glob
 import ipaddress
 from datetime import datetime
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from logging.handlers import RotatingFileHandler
 
 from fastapi import FastAPI, Request, HTTPException, Query
@@ -388,6 +388,18 @@ class Scanner:
         with self._lock:
             self._error_count += 1
 
+    def _cfg_int(self, key, default, minimum=None, maximum=None):
+        raw = self.config.get(key, default)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = default
+        if minimum is not None:
+            value = max(minimum, value)
+        if maximum is not None:
+            value = min(maximum, value)
+        return value
+
     @staticmethod
     def port_open(host, port, timeout=2.0):
         try:
@@ -412,6 +424,26 @@ class Scanner:
             p3389 = fut3389.result()
 
         p5986 = self.port_open(host, 5986, 2.0) if not p5985 else False
+        return {
+            "5985_winrm": p5985,
+            "5986_winrm_ssl": p5986,
+            "445_smb": p445,
+            "3389_rdp": p3389,
+        }
+
+    def _probe_ports_fast(self, host):
+        winrm_timeout = float(self.config.get("port_probe_timeout_winrm", 1.5) or 1.5)
+        fast_timeout = float(self.config.get("port_probe_timeout_fast", 1.0) or 1.0)
+
+        with ThreadPoolExecutor(max_workers=3) as probe_pool:
+            fut5985 = probe_pool.submit(self.port_open, host, 5985, winrm_timeout)
+            fut445 = probe_pool.submit(self.port_open, host, 445, fast_timeout)
+            fut3389 = probe_pool.submit(self.port_open, host, 3389, fast_timeout)
+            p5985 = fut5985.result()
+            p445 = fut445.result()
+            p3389 = fut3389.result()
+
+        p5986 = self.port_open(host, 5986, winrm_timeout) if not p5985 else False
         return {
             "5985_winrm": p5985,
             "5986_winrm_ssl": p5986,
@@ -1945,6 +1977,7 @@ $res | ConvertTo-Json -Compress
 
             ip = dns_cache.resolve(computer)
             result["ip"] = ip
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 120, minimum=20, maximum=900)
 
             scan_targets = self._host_candidates(computer, ip)
             members = None
@@ -1959,20 +1992,10 @@ $res | ConvertTo-Json -Compress
             }
 
             for idx, candidate in enumerate(scan_targets):
-<<<<<<< codex/fix-undefined-variable-error-for-targets-cwomf1
-                ports = self._probe_ports(candidate)
-=======
-                p5985 = self.port_open(candidate, 5985, 2.0)
-                p5986 = self.port_open(candidate, 5986, 2.0) if not p5985 else False
-                p445 = self.port_open(candidate, 445, 1.5)
-                p3389 = self.port_open(candidate, 3389, 1.5)
-                ports = {
-                    "5985_winrm": p5985,
-                    "5986_winrm_ssl": p5986,
-                    "445_smb": p445,
-                    "3389_rdp": p3389,
-                }
->>>>>>> main
+                if time.time() >= deadline:
+                    details.append("Host hard timeout reached before candidate scan")
+                    break
+                ports = self._probe_ports_fast(candidate)
                 for key, value in ports.items():
                     aggregate_ports[key] = aggregate_ports[key] or value
 
@@ -1993,6 +2016,9 @@ $res | ConvertTo-Json -Compress
 
                 if try_details:
                     details.extend([candidate + ": " + d for d in try_details])
+
+            if members is None and time.time() >= deadline and not details:
+                details.append("Host hard timeout reached")
 
             result["ports"] = aggregate_ports
 
@@ -2142,47 +2168,83 @@ $res | ConvertTo-Json -Compress
             for c in unique:
                 futs[self.executor.submit(self.scan_machine, c)] = c["hostname"]
 
-            for fut in as_completed(futs):
-                if self.cancelled:
-                    break
-                try:
-                    res = fut.result()
-                    all_results.append(res)
+            per_host_guard = self._cfg_int("host_hard_timeout_sec", 120, minimum=20, maximum=900) + 20
+            pending = set(futs.keys())
+            started_at = {fut: time.time() for fut in pending}
 
-                    ports_str = json.dumps(res.get("ports", {}))
-                    risk = res.get("risk") or {}
-                    risk_score = risk.get("score", "")
-                    severity = risk.get("severity", "")
+            while pending and not self.cancelled:
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
 
-                    if res.get("error"):
-                        cw.writerow([
-                            res["computer"], res.get("os", ""),
-                            res.get("ip", ""), "", "", "", "",
-                            res.get("scan_time_sec", 0), "", "",
-                            ports_str, res["error"],
-                        ])
-                    else:
-                        if not res["members"]:
+                for fut in done:
+                    try:
+                        res = fut.result()
+                        all_results.append(res)
+
+                        ports_str = json.dumps(res.get("ports", {}))
+                        risk = res.get("risk") or {}
+                        risk_score = risk.get("score", "")
+                        severity = risk.get("severity", "")
+
+                        if res.get("error"):
                             cw.writerow([
                                 res["computer"], res.get("os", ""),
-                                res.get("ip", ""), "<EMPTY>", "", "",
-                                res.get("method", ""),
-                                res.get("scan_time_sec", 0),
-                                risk_score, severity, ports_str, "",
+                                res.get("ip", ""), "", "", "", "",
+                                res.get("scan_time_sec", 0), "", "",
+                                ports_str, res["error"],
                             ])
-                        for m in res["members"]:
-                            cw.writerow([
-                                res["computer"], res.get("os", ""),
-                                res.get("ip", ""), m["name"], m.get("type", ""),
-                                "YES" if m.get("is_builtin") else "NO",
-                                res.get("method", ""),
-                                res.get("scan_time_sec", 0),
-                                risk_score, severity, ports_str, "",
-                            ])
-                except Exception as exc:
-                    logger.error("Future: %s: %s", futs[fut], exc)
-                finally:
+                        else:
+                            if not res["members"]:
+                                cw.writerow([
+                                    res["computer"], res.get("os", ""),
+                                    res.get("ip", ""), "<EMPTY>", "", "",
+                                    res.get("method", ""),
+                                    res.get("scan_time_sec", 0),
+                                    risk_score, severity, ports_str, "",
+                                ])
+                            for m in res["members"]:
+                                cw.writerow([
+                                    res["computer"], res.get("os", ""),
+                                    res.get("ip", ""), m["name"], m.get("type", ""),
+                                    "YES" if m.get("is_builtin") else "NO",
+                                    res.get("method", ""),
+                                    res.get("scan_time_sec", 0),
+                                    risk_score, severity, ports_str, "",
+                                ])
+                    except Exception as exc:
+                        logger.error("Future: %s: %s", futs[fut], exc)
+                    finally:
+                        self._inc_progress()
+
+                now = time.time()
+                overdue = []
+                for fut in pending:
+                    if now - started_at.get(fut, now) > per_host_guard:
+                        overdue.append(fut)
+
+                for fut in overdue:
+                    host = futs.get(fut, "(unknown)")
+                    fut.cancel()
+                    pending.discard(fut)
                     self._inc_progress()
+                    self._inc_errors()
+                    synthetic = {
+                        "computer": host,
+                        "os": "",
+                        "method": None,
+                        "members": [],
+                        "error": "Host scan timeout exceeded guard limit",
+                        "ip": None,
+                        "ports": {},
+                        "scan_time_sec": round(per_host_guard, 2),
+                        "risk": None,
+                    }
+                    all_results.append(synthetic)
+                    self.result_queue.put({"type": "machine", "data": synthetic})
+                    cw.writerow([
+                        host, "", "", "", "", "", "",
+                        synthetic["scan_time_sec"], "", "", "{}", synthetic["error"],
+                    ])
+                    logger.warning("Host timed out by guard limit: %s", host)
 
             metrics.finish(self.total)
 
