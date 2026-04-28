@@ -886,12 +886,12 @@ class Scanner:
             return members_list
 
         expanded = []
-        seen_groups = set()
         expanded_group_keys = set()
         max_groups_per_host = self._cfg_int("expand_max_groups_per_host", 12, minimum=1, maximum=200)
         expand_unknown_accounts = bool(self.config.get("expand_unknown_domain_accounts", False))
 
-        for member in members_list:
+        candidates = []
+        for idx, member in enumerate(members_list):
             name = (member.get("name") or "").strip()
             obj_type = (member.get("type") or "unknown").strip()
             is_group = obj_type.lower() in ("group", "группа", "group (nested)")
@@ -921,26 +921,59 @@ class Scanner:
                 (is_group or expand_unknown_accounts) and
                 group_expand_key not in expanded_group_keys
             )
-            if should_expand and len(expanded_group_keys) >= max_groups_per_host:
-                expanded.append(member)
-                continue
-
             if should_expand:
-                try:
-                    group_members = self._resolve_group_members(account_name, seen_groups, domain_hint=domain_hint)
-                    if group_members:
-                        expanded_group_keys.add(group_expand_key)
-                        member["type"] = "Group"
-                        member["expanded_members"] = group_members
-                        member["expanded_count"] = len(group_members)
-                        expanded.append(member)
-                        for gm in group_members:
-                            gm["via_group"] = name
-                            expanded.append(gm)
-                        continue
-                except Exception as e:
-                    logger.debug("Group expand failed for %s: %s", name, e)
+                candidates.append({
+                    "idx": idx,
+                    "name": name,
+                    "account_name": account_name,
+                    "domain_hint": domain_hint,
+                    "group_expand_key": group_expand_key,
+                })
 
+        # Resolve candidate groups in parallel to reduce per-host expansion wall-time.
+        resolved_map = {}
+        unique_candidates = []
+        seen_candidate_keys = set()
+        for c in candidates:
+            if len(unique_candidates) >= max_groups_per_host:
+                break
+            key = c["group_expand_key"]
+            if key in seen_candidate_keys:
+                continue
+            seen_candidate_keys.add(key)
+            unique_candidates.append(c)
+
+        if unique_candidates:
+            workers = self._cfg_int("expand_group_workers", 4, minimum=1, maximum=16)
+            with ThreadPoolExecutor(max_workers=min(workers, len(unique_candidates))) as pool:
+                fut_map = {}
+                for c in unique_candidates:
+                    fut = pool.submit(self._resolve_group_members, c["account_name"], set(), 0, c["domain_hint"])
+                    fut_map[fut] = c
+                for fut, c in list(fut_map.items()):
+                    try:
+                        resolved_map[c["group_expand_key"]] = fut.result()
+                    except Exception as e:
+                        logger.debug("Group expand failed for %s: %s", c["name"], e)
+                        resolved_map[c["group_expand_key"]] = None
+
+        for member in members_list:
+            name = (member.get("name") or "").strip()
+            obj_type = (member.get("type") or "unknown").strip()
+            account_name = name.split("\\", 1)[1] if "\\" in name else (name.split("@", 1)[0] if "@" in name else name)
+            domain_hint = name.split("\\", 1)[0] if "\\" in name else (name.split("@", 1)[1] if "@" in name else "")
+            key = ((domain_hint or domain).lower(), account_name.lower())
+            group_members = resolved_map.get(key)
+            if group_members:
+                expanded_group_keys.add(key)
+                member["type"] = "Group"
+                member["expanded_members"] = group_members
+                member["expanded_count"] = len(group_members)
+                expanded.append(member)
+                for gm in group_members:
+                    gm["via_group"] = name
+                    expanded.append(gm)
+                continue
             expanded.append(member)
 
         return expanded
@@ -2054,6 +2087,7 @@ $res | ConvertTo-Json -Compress
             "scan_time_sec": 0, "risk": None,
         }
         sem_acquired = False
+        sem_released_early = False
         try:
             if self.cancelled:
                 raise RuntimeError("Cancelled")
@@ -2115,6 +2149,14 @@ $res | ConvertTo-Json -Compress
                     break
 
             result["ports"] = aggregate_ports
+            # Important performance optimization:
+            # release shared network slot BEFORE LDAP group expansion/risk post-processing.
+            if sem_acquired and getattr(self, "net_semaphore", None) is not None:
+                try:
+                    self.net_semaphore.release()
+                    sem_released_early = True
+                except Exception:
+                    pass
 
             if resolved_members is None:
                 if not ip:
@@ -2168,7 +2210,7 @@ $res | ConvertTo-Json -Compress
                 self._inc_errors()
                 logger.warning("FAIL %s: %s", computer, e)
         finally:
-            if sem_acquired and getattr(self, "net_semaphore", None) is not None:
+            if sem_acquired and not sem_released_early and getattr(self, "net_semaphore", None) is not None:
                 try:
                     self.net_semaphore.release()
                 except Exception:
