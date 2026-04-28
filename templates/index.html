@@ -8,7 +8,7 @@
         *{box-sizing:border-box}
         body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:15px;background:#f0f2f5;color:#333}
         h1{margin:0 0 15px;color:#1a1a2e;font-size:22px}
-        .container{max-width:1200px;margin:0 auto}
+        .container{max-width:1800px;width:96vw;margin:0 auto}
         .nav{margin-bottom:12px;overflow:hidden}
         .nav a{color:#4a90d9;text-decoration:none;font-size:14px;margin-right:15px}
         .nav a:hover{text-decoration:underline}
@@ -91,21 +91,21 @@
                 <div class="form-row"><label data-i18n="lbl_pass">Password:</label><input type="password" id="cfgPass"></div>
                 <div class="form-row"><label data-i18n="lbl_srv_user">Server Username (optional):</label><input type="text" id="cfgSrvUser"></div>
                 <div class="form-row"><label data-i18n="lbl_srv_pass">Server Password:</label><input type="password" id="cfgSrvPass"></div>
-                <div class="form-row"><label data-i18n="lbl_threads">Max Threads:</label><input type="number" id="cfgThreads" value="30"></div>
+                <div class="form-row"><label data-i18n="lbl_threads">Max Threads:</label><input type="number" id="cfgThreads" min="1" max="200" value="30"></div>
             </div>
         </div>
         <div class="form-row"><label data-i18n="lbl_ou_work">Workstations OU:</label><input type="text" id="cfgOuWork"></div>
         <div class="form-row"><label data-i18n="lbl_ou_srv">Servers OU:</label><input type="text" id="cfgOuSrv"></div>
-        <div class="form-row"><label data-i18n="lbl_timeout">Host Timeout (sec):</label><input type="number" id="cfgTimeout" value="40"></div>
+        <div class="form-row"><label data-i18n="lbl_timeout">Host Timeout (sec):</label><input type="number" id="cfgTimeout" min="5" max="600" value="40"></div>
         <div class="cols">
             <div class="col-left">
-                <div class="form-row"><label data-i18n="lbl_hard_timeout">Host Hard Timeout (sec):</label><input type="number" id="cfgHardTimeout" value="300"></div>
+                <div class="form-row"><label data-i18n="lbl_hard_timeout">Host Hard Timeout (sec):</label><input type="number" id="cfgHardTimeout" min="60" max="3600" value="300"></div>
             </div>
             <div class="col-right">
-                <div class="form-row"><label data-i18n="lbl_probe_winrm">WinRM Probe Timeout (sec):</label><input type="number" step="0.1" id="cfgProbeWinrm" value="1.5"></div>
+                <div class="form-row"><label data-i18n="lbl_probe_winrm">WinRM Probe Timeout (sec):</label><input type="number" step="0.1" min="0.5" max="10" id="cfgProbeWinrm" value="1.5"></div>
             </div>
         </div>
-        <div class="form-row"><label data-i18n="lbl_probe_fast">Fast Port Probe Timeout (sec):</label><input type="number" step="0.1" id="cfgProbeFast" value="1.0"></div>
+        <div class="form-row"><label data-i18n="lbl_probe_fast">Fast Port Probe Timeout (sec):</label><input type="number" step="0.1" min="0.2" max="5" id="cfgProbeFast" value="1.0"></div>
         <div class="form-row"><label data-i18n="lbl_allowed">Allowed Admins (one per line):</label><textarea id="cfgAllowed" placeholder="DOMAIN\Admin1&#10;DOMAIN\HelpDesk"></textarea></div>
         <div class="form-row"><label data-i18n="lbl_aliases">Additional domain aliases (one per line):</label><textarea id="cfgDomainAliases" placeholder="OTHERDOMAIN&#10;LEGACY"></textarea></div>
         <div class="form-row-inline">
@@ -368,6 +368,13 @@ function formatETA(sec){
     if(m > 0) return m + "m " + s + "s";
     return s + "s"
 }
+function clampNumber(v, defVal, minV, maxV){
+    var n = parseFloat(v);
+    if(isNaN(n)) n = defVal;
+    if(minV !== undefined && n < minV) n = minV;
+    if(maxV !== undefined && n > maxV) n = maxV;
+    return n;
+}
 
 function saveSettings(){
     try{
@@ -464,11 +471,11 @@ function doStart(){
         ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:adUser,password:adPass},
         server_ad_config:{username:srvUser,password:srvPass},
         workstations_ou:val("cfgOuWork"),servers_ou:val("cfgOuSrv"),
-        max_threads:parseInt(val("cfgThreads"),10)||30,
-        host_timeout:parseInt(val("cfgTimeout"),10)||40,
-        host_hard_timeout_sec:parseInt(val("cfgHardTimeout"),10)||300,
-        port_probe_timeout_winrm:parseFloat(val("cfgProbeWinrm"))||1.5,
-        port_probe_timeout_fast:parseFloat(val("cfgProbeFast"))||1.0,
+        max_threads:Math.round(clampNumber(val("cfgThreads"),30,1,200)),
+        host_timeout:Math.round(clampNumber(val("cfgTimeout"),40,5,600)),
+        host_hard_timeout_sec:Math.round(clampNumber(val("cfgHardTimeout"),300,60,3600)),
+        port_probe_timeout_winrm:clampNumber(val("cfgProbeWinrm"),1.5,0.5,10),
+        port_probe_timeout_fast:clampNumber(val("cfgProbeFast"),1.0,0.2,5),
         allowed_admins:allowed,
         domain_aliases:domainAliases,
         group_targets:groupTargets,

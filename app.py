@@ -432,8 +432,16 @@ class Scanner:
         }
 
     def _probe_ports_fast(self, host):
-        winrm_timeout = float(self.config.get("port_probe_timeout_winrm", 1.5) or 1.5)
-        fast_timeout = float(self.config.get("port_probe_timeout_fast", 1.0) or 1.0)
+        try:
+            winrm_timeout = float(self.config.get("port_probe_timeout_winrm", 1.5) or 1.5)
+        except (TypeError, ValueError):
+            winrm_timeout = 1.5
+        try:
+            fast_timeout = float(self.config.get("port_probe_timeout_fast", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            fast_timeout = 1.0
+        winrm_timeout = max(0.5, min(10.0, winrm_timeout))
+        fast_timeout = max(0.2, min(5.0, fast_timeout))
 
         with ThreadPoolExecutor(max_workers=3) as probe_pool:
             fut5985 = probe_pool.submit(self.port_open, host, 5985, winrm_timeout)
@@ -2949,6 +2957,24 @@ async def start_scan(request: Request):
         ad_cfg["password"] = srv_cfg.get("password")
     cfg["ad_config"] = ad_cfg
     cfg["server_ad_config"] = srv_cfg
+
+    # Sanitize runtime tuning values to avoid unusable tiny timeouts from UI input.
+    try:
+        cfg["host_timeout"] = max(5, min(600, int(cfg.get("host_timeout", 40))))
+    except (TypeError, ValueError):
+        cfg["host_timeout"] = 40
+    try:
+        cfg["host_hard_timeout_sec"] = max(60, min(3600, int(cfg.get("host_hard_timeout_sec", 300))))
+    except (TypeError, ValueError):
+        cfg["host_hard_timeout_sec"] = 300
+    try:
+        cfg["port_probe_timeout_winrm"] = max(0.5, min(10.0, float(cfg.get("port_probe_timeout_winrm", 1.5))))
+    except (TypeError, ValueError):
+        cfg["port_probe_timeout_winrm"] = 1.5
+    try:
+        cfg["port_probe_timeout_fast"] = max(0.2, min(5.0, float(cfg.get("port_probe_timeout_fast", 1.0))))
+    except (TypeError, ValueError):
+        cfg["port_probe_timeout_fast"] = 1.0
 
     if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
         return JSONResponse({"error": "Missing AD server/username"}, status_code=400)
