@@ -316,6 +316,7 @@ class Scanner:
         self.executor = None
         self.probe_executor = None
         self.net_semaphore = None
+        self.rpc_semaphore = None
         self.config = {}
 
     def _load_last_summary(self):
@@ -496,9 +497,35 @@ class Scanner:
         is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
         prefer_rpc = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
 
-        if prefer_rpc and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', False)):
+        rpc_enabled = bool(self.config.get("use_rpc_fallback", False))
+        rpc_adaptive = bool(self.config.get("use_rpc_adaptive", False))
+
+        def _rpc_allowed_now():
+            if not rpc_enabled or not ports.get("445_smb"):
+                return False
+            if not rpc_adaptive:
+                return True
+            # Adaptive mode: attempt RPC only when WinRM is unavailable.
+            return not ports.get("5985_winrm") and not ports.get("5986_winrm_ssl")
+
+        def _run_rpc():
+            sem = getattr(self, "rpc_semaphore", None)
+            if sem is None:
+                return self._try_rpc_samr(target_host, comp_info=comp_info)
+            acquired = False
+            try:
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        return (None, "RPC-SAMR: cancelled")
+                acquired = True
+                return self._try_rpc_samr(target_host, comp_info=comp_info)
+            finally:
+                if acquired:
+                    sem.release()
+
+        if prefer_rpc and _rpc_allowed_now():
             mt0 = time.time()
-            m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
+            m, r = _run_rpc()
             if m:
                 method = m + "-legacy-priority"
                 members = r
@@ -544,9 +571,12 @@ class Scanner:
         elif members is None:
             details.append("WMI fallback skipped by config")
 
-        if members is None and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', False)):
+        if members is None and ports.get('445_smb') and rpc_enabled:
+            if rpc_adaptive and (ports.get("5985_winrm") or ports.get("5986_winrm_ssl")):
+                details.append("RPC-SAMR skipped (adaptive mode: WinRM open)")
+                return method, members, details
             mt0 = time.time()
-            m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
+            m, r = _run_rpc()
             if m:
                 method = m
                 members = r
@@ -1803,9 +1833,13 @@ $res | ConvertTo-Json -Compress
                     return (True, "session user=" + smb_user)
                 except Exception as e1:
                     e1_text = _fmt_exc(e1)
+                    e1_lower = e1_text.lower()
                     last_err = smb_user + ": " + e1_text
+                    # Deterministic target/session errors: do not waste time on more retries.
+                    if " 66" in e1_lower or "error 66" in e1_lower or "2457" in e1_lower or "clock skew" in e1_lower:
+                        return (False, "fatal session error: " + last_err)
                     # Retry with NetUseDel only when this looks like an existing conflicting session.
-                    if "1219" not in e1_text and "multiple connections" not in e1_text.lower():
+                    if "1219" not in e1_text and "multiple connections" not in e1_lower:
                         continue
                     try:
                         try:
@@ -2103,6 +2137,21 @@ $res | ConvertTo-Json -Compress
             # Start hard-timeout countdown only after entering network work section.
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                wait_started = time.time()
+                queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        raise RuntimeError("Cancelled")
+                    if time.time() - wait_started > queue_timeout:
+                        raise RuntimeError("Network queue timeout waiting for worker slot")
+                sem_acquired = True
+
+            # Start hard-timeout countdown only after entering network work section.
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+
             scan_targets = self._host_candidates(computer, ip)
             if not ip:
                 scan_targets = [computer]
@@ -2146,6 +2195,7 @@ $res | ConvertTo-Json -Compress
                         "netuseadd", "неверно указан тип сетевого ресурса",
                         "часы данного сервера не синхронизованы",
                         "access denied", "доступ запрещен",
+                        "error 66", " 66", "2457", "clock skew",
                     )
                     joined = " | ".join(str(x).lower() for x in try_details)
                     if any(marker in joined for marker in fatal_markers):
@@ -2314,6 +2364,16 @@ $res | ConvertTo-Json -Compress
             else:
                 net_limit = 0
                 self.net_semaphore = None
+            rpc_limit_cfg = int(config.get("rpc_parallel_limit", 0) or 0)
+            if bool(config.get("use_rpc_fallback", False)):
+                if rpc_limit_cfg <= 0:
+                    rpc_limit = max(1, min(8, max_w // 4 or 1))
+                else:
+                    rpc_limit = max(1, min(rpc_limit_cfg, max_w))
+                self.rpc_semaphore = threading.BoundedSemaphore(rpc_limit)
+                logger.info("RPC concurrency limit: %d", rpc_limit)
+            else:
+                self.rpc_semaphore = None
 
             probe_workers = min(64, max(8, max_w * 2))
             self.probe_executor = ThreadPoolExecutor(max_workers=probe_workers)
@@ -2422,6 +2482,7 @@ $res | ConvertTo-Json -Compress
                 self.probe_executor.shutdown(wait=False, cancel_futures=True)
                 self.probe_executor = None
             self.net_semaphore = None
+            self.rpc_semaphore = None
             if self.ldap_conn:
                 try:
                     self.ldap_conn.unbind()
@@ -3126,6 +3187,11 @@ async def start_scan(request: Request):
         cfg["port_probe_timeout_fast"] = max(0.1, min(3.0, float(cfg.get("port_probe_timeout_fast", 0.6))))
     except (TypeError, ValueError):
         cfg["port_probe_timeout_fast"] = 0.6
+    try:
+        cfg["rpc_parallel_limit"] = max(0, min(64, int(cfg.get("rpc_parallel_limit", 0))))
+    except (TypeError, ValueError):
+        cfg["rpc_parallel_limit"] = 0
+    cfg["use_rpc_adaptive"] = bool(cfg.get("use_rpc_adaptive", True))
 
     if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
         return JSONResponse({"error": "Missing AD server/username"}, status_code=400)
