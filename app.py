@@ -314,6 +314,7 @@ class Scanner:
         self.ldap_conn = None
         self.ldap_gc_conn = None
         self.executor = None
+        self.probe_executor = None
         self.config = {}
 
     def _load_last_summary(self):
@@ -443,11 +444,18 @@ class Scanner:
         winrm_timeout = max(0.5, min(10.0, winrm_timeout))
         fast_timeout = max(0.2, min(5.0, fast_timeout))
 
-        # Intentionally sequential: avoids nested thread-pool explosion when
-        # scanning many hosts in parallel and keeps thread usage predictable.
-        p5985 = self.port_open(host, 5985, winrm_timeout)
-        p445 = self.port_open(host, 445, fast_timeout)
-        p3389 = self.port_open(host, 3389, fast_timeout)
+        probe_exec = getattr(self, "probe_executor", None)
+        if probe_exec:
+            f5985 = probe_exec.submit(self.port_open, host, 5985, winrm_timeout)
+            f445 = probe_exec.submit(self.port_open, host, 445, fast_timeout)
+            f3389 = probe_exec.submit(self.port_open, host, 3389, fast_timeout)
+            p5985 = f5985.result()
+            p445 = f445.result()
+            p3389 = f3389.result()
+        else:
+            p5985 = self.port_open(host, 5985, winrm_timeout)
+            p445 = self.port_open(host, 445, fast_timeout)
+            p3389 = self.port_open(host, 3389, fast_timeout)
         p5986 = self.port_open(host, 5986, winrm_timeout) if not p5985 else False
         return {
             "5985_winrm": p5985,
@@ -2189,7 +2197,10 @@ $res | ConvertTo-Json -Compress
                 max_w = min(max_cfg, hard_cap)
 
             self.executor = ThreadPoolExecutor(max_workers=max_w)
+            probe_workers = min(128, max(8, max_w * 4))
+            self.probe_executor = ThreadPoolExecutor(max_workers=probe_workers)
             logger.info("Thread pool size: %d (requested=%d, cap=%d)", max_w, max_cfg, hard_cap)
+            logger.info("Port probe pool size: %d", probe_workers)
             futs = {}
             for c in unique:
                 futs[self.executor.submit(self.scan_machine, c)] = c["hostname"]
@@ -2288,6 +2299,9 @@ $res | ConvertTo-Json -Compress
                     pass
             if self.executor:
                 self.executor.shutdown(wait=False, cancel_futures=True)
+            if getattr(self, "probe_executor", None):
+                self.probe_executor.shutdown(wait=False, cancel_futures=True)
+                self.probe_executor = None
             if self.ldap_conn:
                 try:
                     self.ldap_conn.unbind()
