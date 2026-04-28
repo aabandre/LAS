@@ -130,6 +130,7 @@
 
     <div class="toolbar">
         <button class="print-btn" onclick="window.print()" data-i18n="s_print">Print</button>
+        <button onclick="exportFilteredAdminsCSV()" data-i18n="s_export_filtered">Export filtered admins CSV</button>
         <select id="selScan" onchange="loadSelectedScan()"><option value="" data-i18n="s_load_prev">-- Load previous --</option></select>
         <button class="rebuild-btn" onclick="rebuildCurrent()" data-i18n="s_rebuild">Rebuild All</button>
         <select id="selDiff1"><option value="" data-i18n="s_scan1">Scan 1</option></select>
@@ -142,6 +143,10 @@
     <div id="content" style="display:none">
         <div class="cards" id="summaryCards"></div>
         <div class="insights" id="summaryInsights"></div>
+        <div class="tbl-wrap">
+            <h3 data-i18n="s_top_errors">Top hosts with errors</h3>
+            <div id="topErrorHosts" style="font-size:12px;color:#555"></div>
+        </div>
         <div class="tabs" id="tabBar"></div>
 
         <div class="tab-content active" id="tabCharts">
@@ -252,7 +257,7 @@
    ═══════════════════════════════════════ */
 var LANG={
 en:{
-    s_back:"\u2190 Back to Scanner",s_title:"Scan Summary & Analytics",s_print:"Print",s_rebuild:"Rebuild All",
+    s_back:"\u2190 Back to Scanner",s_title:"Scan Summary & Analytics",s_print:"Print",s_rebuild:"Rebuild All",s_export_filtered:"Export filtered admins CSV",
     s_compare:"Compare",s_loading:"Loading...",s_load_prev:"-- Load previous --",s_scan1:"Scan 1",s_scan2:"Scan 2",
     ch_results:"Results",ch_methods:"Methods",ch_errors:"Errors",ch_os:"OS",ch_ports:"Ports",
     adm_title:"All Admin Accounts",adm_showing:"Showing",adm_of:"of",adm_search:"Search accounts...",
@@ -271,12 +276,12 @@ en:{
     card_risky:"Risky",card_clean:"Clean",card_avg:"Avg",card_max:"Max",card_critical:"Critical",
     all_clean:"All clean!",no_data:"No data",diff_no_changes:"No changes!",
     diff_added:"Added",diff_removed:"Removed",diff_new:"New",
-    dl_download:"Download",dl_load:"Load",rebuilt_msg:"Rebuilt! Accounts: "
+    dl_download:"Download",dl_load:"Load",rebuilt_msg:"Rebuilt! Accounts: ",s_top_errors:"Top hosts with errors"
 },
 ru:{
     s_back:"\u2190 \u041d\u0430\u0437\u0430\u0434 \u043a \u0441\u043a\u0430\u043d\u0435\u0440\u0443",
     s_title:"\u0421\u0432\u043e\u0434\u043a\u0430 \u0438 \u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a\u0430",
-    s_print:"\u041f\u0435\u0447\u0430\u0442\u044c",s_rebuild:"\u041f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u0442\u044c",
+    s_print:"\u041f\u0435\u0447\u0430\u0442\u044c",s_rebuild:"\u041f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u0442\u044c",s_export_filtered:"\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u043e\u0442\u0444\u0438\u043b\u044c\u0442\u0440. \u0430\u0434\u043c\u0438\u043d\u043e\u0432 (CSV)",
     s_compare:"\u0421\u0440\u0430\u0432\u043d\u0438\u0442\u044c",s_loading:"\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...",
     s_load_prev:"-- \u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c --",s_scan1:"\u0421\u043a\u0430\u043d 1",s_scan2:"\u0421\u043a\u0430\u043d 2",
     ch_results:"\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u044b",ch_methods:"\u041c\u0435\u0442\u043e\u0434\u044b",
@@ -316,7 +321,7 @@ ru:{
     diff_added:"\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e",diff_removed:"\u0423\u0434\u0430\u043b\u0435\u043d\u043e",
     diff_new:"\u041d\u043e\u0432\u044b\u0435",
     dl_download:"\u0421\u043a\u0430\u0447\u0430\u0442\u044c",dl_load:"\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c",
-    rebuilt_msg:"\u041f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u043d\u043e! \u0423\u0447\u0451\u0442\u043e\u043a: "
+    rebuilt_msg:"\u041f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u043d\u043e! \u0423\u0447\u0451\u0442\u043e\u043a: ",s_top_errors:"\u0422\u043e\u043f \u0445\u043e\u0441\u0442\u043e\u0432 \u0441 \u043e\u0448\u0438\u0431\u043a\u0430\u043c\u0438"
 }};
 
 var currentLang="en";
@@ -450,7 +455,7 @@ function renderAll(){if(!SD)return;buildTabs();applyLang();renderCards();
     drawPie("cResults","lResults",{"Success":SD.success||0,"Errors":SD.errors||0},["#5cb85c","#d9534f"]);
     drawPie("cMethods","lMethods",SD.method_breakdown||{},COLORS);drawPie("cErrors","lErrors",SD.error_breakdown||{},COLORS.slice(2));
     drawPie("cOS","lOS",SD.os_breakdown||{},COLORS.slice(4));drawPie("cPorts","lPorts",SD.port_statistics||{},COLORS);
-    renderAdmins();renderMachineFilter();loadAdminFilters();filterAdmins();renderMachineDetails();renderRisky();renderClean();renderHeatmap()}
+    renderAdmins();renderMachineFilter();loadAdminFilters();filterAdmins();renderMachineDetails();renderRisky();renderClean();renderHeatmap();renderTopErrorHosts()}
 
 function renderCards(){var d=SD,sb=d.severity_breakdown||{};
     var items=[{v:d.total_scanned||0,l:"card_total",c:"c-blue"},{v:d.success||0,l:"card_success",c:"c-green"},{v:d.errors||0,l:"card_errors",c:"c-red"},
@@ -462,11 +467,33 @@ function renderCards(){var d=SD,sb=d.severity_breakdown||{};
 
     var total=d.total_scanned||0,success=d.success||0,errors=d.errors||0,risky=d.risky_machines_count||0;
     var errPct=pct(errors,total),riskPct=pct(risky,total),okPct=pct(success,total);
+    var topMethod="-",topMethodCount=0,mk=d.method_breakdown||{},k;
+    for(k in mk){if(mk.hasOwnProperty(k)&&mk[k]>topMethodCount){topMethodCount=mk[k];topMethod=k}}
     var insightHtml=
         "<div class=\"insight\"><div class=\"insight-title\">Success rate</div><div class=\"insight-val\">"+okPct+"%</div><div class=\"insight-sub\">"+success+" / "+total+" hosts</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,okPct)+"%;background:#5cb85c\"></span></div></div>"+
         "<div class=\"insight\"><div class=\"insight-title\">Error rate</div><div class=\"insight-val\">"+errPct+"%</div><div class=\"insight-sub\">"+errors+" hosts with errors</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,errPct)+"%;background:#d9534f\"></span></div></div>"+
-        "<div class=\"insight\"><div class=\"insight-title\">Risk coverage</div><div class=\"insight-val\">"+riskPct+"%</div><div class=\"insight-sub\">"+risky+" risky / "+(d.clean_machines_count||0)+" clean</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,riskPct)+"%;background:#f0ad4e\"></span></div></div>";
+        "<div class=\"insight\"><div class=\"insight-title\">Risk coverage</div><div class=\"insight-val\">"+riskPct+"%</div><div class=\"insight-sub\">"+risky+" risky / "+(d.clean_machines_count||0)+" clean</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,riskPct)+"%;background:#f0ad4e\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">Main method</div><div class=\"insight-val\">"+escapeHtml(topMethod)+"</div><div class=\"insight-sub\">"+topMethodCount+" hosts</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,pct(topMethodCount,total))+"%;background:#9b59b6\"></span></div></div>";
     $("summaryInsights").innerHTML=insightHtml;
+}
+
+function renderTopErrorHosts(){
+    var box=$("topErrorHosts");
+    if(!box) return;
+    var mm=SD.machine_memberships||{},items=[],m;
+    for(m in mm){
+        if(mm.hasOwnProperty(m) && mm[m] && mm[m].error){
+            items.push({machine:m,error:String(mm[m].error),time:parseFloat(mm[m].scan_time_sec||0)});
+        }
+    }
+    if(!items.length){box.innerHTML="<span style=\"color:#5cb85c\">"+t("all_clean")+"</span>";return;}
+    items.sort(function(a,b){return (b.time-a.time)|| (a.machine>b.machine?1:-1);});
+    var lim=Math.min(items.length,15),h="<ol style=\"margin:0;padding-left:18px\">";
+    for(var i=0;i<lim;i++){
+        h+="<li style=\"margin-bottom:4px\"><b>"+escapeHtml(items[i].machine)+"</b> ("+formatDuration(items[i].time||0)+"): "+escapeHtml(items[i].error).slice(0,180)+"</li>";
+    }
+    h+="</ol>";
+    box.innerHTML=h;
 }
 
 function drawPie(cid,lid,obj,colors){var cv=$(cid);if(!cv||!cv.getContext)return;var ctx=cv.getContext("2d"),w=cv.width,h=cv.height,cx=w/2,cy=h/2,r=Math.min(w,h)/2-6;ctx.clearRect(0,0,w,h);
@@ -592,6 +619,29 @@ function filterGrid(gid,iid){var f=val(iid).toLowerCase(),items=$(gid).getElemen
 function sortTbl(tid,col){var table=$(tid),tbody=table.getElementsByTagName("tbody")[0],rows=tbody.getElementsByTagName("tr"),arr=[];for(var i=0;i<rows.length;i++)arr.push(rows[i]);var key=tid+"_"+col,asc=!sortDirs[key];sortDirs[key]=asc;
     arr.sort(function(a,b){var tdA=a.getElementsByTagName("td")[col],tdB=b.getElementsByTagName("td")[col];var ca=tdA?(tdA.innerText||tdA.textContent||""):"",cb=tdB?(tdB.innerText||tdB.textContent||""):"";var na=parseFloat(ca),nb=parseFloat(cb);if(!isNaN(na)&&!isNaN(nb))return asc?na-nb:nb-na;ca=ca.toLowerCase();cb=cb.toLowerCase();return asc?(ca<cb?-1:ca>cb?1:0):(ca>cb?-1:ca<cb?1:0)});
     for(i=0;i<arr.length;i++)tbody.appendChild(arr[i]);adminCurrentPage=1;filterAdmins()}
+
+function exportFilteredAdminsCSV(){
+    var body=$("adminBody"); if(!body){alert("No table");return;}
+    var rows=body.getElementsByTagName("tr"),lines=["account,type,count,via_group,machines"],i;
+    for(i=0;i<rows.length;i++){
+        if(rows[i].style.display==="none") continue;
+        var tds=rows[i].getElementsByTagName("td");
+        if(!tds||tds.length<6) continue;
+        var account=(tds[1].innerText||"").replace(/\s+\w+\s*$/,"").trim();
+        var typ=(tds[2].innerText||"").trim();
+        var count=(tds[3].innerText||"").trim();
+        var via=(tds[4].innerText||"").replace(/\s+/g," ").trim();
+        var machines=(tds[5].innerText||"").replace(/\s+/g," ").trim();
+        var vals=[account,typ,count,via,machines];
+        for(var j=0;j<vals.length;j++){vals[j]='"'+String(vals[j]).replace(/"/g,'""')+'"';}
+        lines.push(vals.join(","));
+    }
+    var csv=lines.join("\n");
+    var blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    var url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download="filtered_admins_"+new Date().toISOString().replace(/[:.]/g,"-")+".csv";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+}
 </script>
 </body>
 </html>
