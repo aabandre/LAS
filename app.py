@@ -2058,6 +2058,21 @@ $res | ConvertTo-Json -Compress
             # Start hard-timeout countdown only after entering network work section.
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                wait_started = time.time()
+                queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        raise RuntimeError("Cancelled")
+                    if time.time() - wait_started > queue_timeout:
+                        raise RuntimeError("Network queue timeout waiting for worker slot")
+                sem_acquired = True
+
+            # Start hard-timeout countdown only after entering network work section.
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+
             scan_targets = self._host_candidates(computer, ip)
             members = None
             method = None
@@ -2254,14 +2269,16 @@ $res | ConvertTo-Json -Compress
             net_limit_cfg = int(config.get("network_limit", 0) or 0)
             if net_limit_cfg > 0:
                 net_limit = max(1, min(net_limit_cfg, max_w))
+                self.net_semaphore = threading.BoundedSemaphore(net_limit)
+                logger.info("Network concurrency limit: %d", net_limit)
             else:
-                net_limit = max(4, min(24, max_w))
-            self.net_semaphore = threading.BoundedSemaphore(net_limit)
+                net_limit = 0
+                self.net_semaphore = None
 
             probe_workers = min(64, max(8, max_w * 2))
             self.probe_executor = ThreadPoolExecutor(max_workers=probe_workers)
             logger.info("Thread pool size: %d (requested=%d, cap=%d)", max_w, max_cfg, hard_cap)
-            logger.info("Network concurrency limit: %d", net_limit)
+            logger.info("Network concurrency limit: %s", "disabled" if net_limit == 0 else str(net_limit))
             logger.info("Port probe pool size: %d", probe_workers)
             futs = {}
             for c in unique:
