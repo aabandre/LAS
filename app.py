@@ -318,6 +318,11 @@ class Scanner:
         self.net_semaphore = None
         self.rpc_semaphore = None
         self._group_expand_cache = {}
+        self._tls = threading.local()
+        self._gc_rr_lock = threading.Lock()
+        self._gc_rr_index = 0
+        self._gc_conns = []
+        self._gc_conns_lock = threading.Lock()
         self.config = {}
 
     def _load_last_summary(self):
@@ -591,6 +596,64 @@ class Scanner:
         )
         logger.info("LDAP GC connected to %s:3268", cfg["server"])
 
+    def _ldap_server_candidates(self, for_gc=False):
+        cfg = self.config.get("ad_config", {}) or {}
+        raw = cfg.get("gc_servers") if for_gc else cfg.get("ldap_servers")
+        if not raw:
+            raw = cfg.get("server", "")
+        parts = []
+        for p in str(raw).replace(";", ",").split(","):
+            v = p.strip()
+            if v and v not in parts:
+                parts.append(v)
+        return parts
+
+    def _next_gc_server(self):
+        servers = self._ldap_server_candidates(for_gc=True)
+        if not servers:
+            return None
+        with self._gc_rr_lock:
+            idx = self._gc_rr_index % len(servers)
+            self._gc_rr_index += 1
+        return servers[idx]
+
+    def _get_gc_conn_for_thread(self):
+        cfg = self.config.get("ad_config", {}) or {}
+        if not getattr(self, "_tls", None):
+            self._tls = threading.local()
+        conns = getattr(self._tls, "gc_conns", None)
+        if conns is None:
+            conns = {}
+            self._tls.gc_conns = conns
+
+        server_name = self._next_gc_server()
+        if not server_name:
+            return None
+        conn = conns.get(server_name)
+        if conn and getattr(conn, "bound", False):
+            return conn
+
+        user = str(cfg.get("username") or "")
+        domain = str(cfg.get("domain") or "")
+        if user and "@" not in user and domain:
+            user = user + "@" + domain
+        try:
+            srv = ldap3.Server(server_name, port=3268, get_info=ldap3.NONE)
+            conn = ldap3.Connection(
+                srv,
+                user=user,
+                password=str(cfg.get("password") or ""),
+                authentication=ldap3.SIMPLE,
+                auto_bind=True,
+            )
+            conns[server_name] = conn
+            with self._gc_conns_lock:
+                self._gc_conns.append(conn)
+            return conn
+        except Exception as e:
+            logger.debug("GC connect failed for %s: %s", server_name, e)
+            return None
+
     def _credentials_for_target(self, comp_info=None):
         base = dict(self.config.get("ad_config", {}) or {})
         target_type = ""
@@ -802,8 +865,11 @@ class Scanner:
         member_cap = self._cfg_int("expand_group_member_cap", 2000, minimum=100, maximum=20000)
 
         try:
-            self.ensure_ldap_gc()
-            self.ldap_gc_conn.search(
+            gc_conn = self._get_gc_conn_for_thread()
+            if gc_conn is None:
+                self.ensure_ldap_gc()
+                gc_conn = self.ldap_gc_conn
+            gc_conn.search(
                 search_base="",
                 search_filter=transitive_filter,
                 search_scope=ldap3.SUBTREE,
@@ -811,7 +877,7 @@ class Scanner:
                 paged_size=1000,
             )
             while True:
-                for entry in self.ldap_gc_conn.entries:
+                for entry in gc_conn.entries:
                     if len(members) >= member_cap:
                         break
                     name = self._entry_account_name(entry)
@@ -837,7 +903,7 @@ class Scanner:
                     break
 
                 cookie = (
-                    self.ldap_gc_conn.result
+                    gc_conn.result
                     .get("controls", {})
                     .get("1.2.840.113556.1.4.319", {})
                     .get("value", {})
@@ -845,7 +911,7 @@ class Scanner:
                 )
                 if not cookie:
                     break
-                self.ldap_gc_conn.search(
+                gc_conn.search(
                     search_base="",
                     search_filter=transitive_filter,
                     search_scope=ldap3.SUBTREE,
@@ -2439,6 +2505,16 @@ $res | ConvertTo-Json -Compress
                     self.ldap_gc_conn.unbind()
                 except Exception:
                     pass
+            if getattr(self, "_gc_conns", None):
+                with self._gc_conns_lock:
+                    conns = list(self._gc_conns)
+                    self._gc_conns = []
+                for c in conns:
+                    try:
+                        if c and getattr(c, "bound", False):
+                            c.unbind()
+                    except Exception:
+                        pass
 
             # Clear password from memory
             if self.config.get("ad_config"):

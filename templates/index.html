@@ -89,6 +89,7 @@
         <div class="cols">
             <div class="col-left">
                 <div class="form-row"><label data-i18n="lbl_dc">Domain Controller:</label><input type="text" id="cfgServer"></div>
+                <div class="form-row"><label data-i18n="lbl_gc_servers">GC/DC servers list (comma separated):</label><input type="text" id="cfgGcServers" placeholder="dc1.domain.local,dc2.domain.local"></div>
                 <div class="form-row"><label data-i18n="lbl_domain">Domain (FQDN):</label><input type="text" id="cfgDomain"></div>
                 <div class="form-row"><label data-i18n="lbl_netbios">NetBIOS Domain:</label><input type="text" id="cfgNetbios"></div>
             </div>
@@ -186,6 +187,7 @@ var LANG = {
         btn_start: "Start Scan",
         btn_stop: "Stop",
         lbl_dc: "Domain Controller:",
+        lbl_gc_servers: "GC/DC servers list (comma separated):",
         lbl_domain: "Domain (FQDN):",
         lbl_netbios: "NetBIOS Domain:",
         lbl_user: "Username:",
@@ -255,6 +257,7 @@ var LANG = {
         btn_start: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c",
         btn_stop: "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c",
         lbl_dc: "\u041a\u043e\u043d\u0442\u0440\u043e\u043b\u043b\u0435\u0440 \u0434\u043e\u043c\u0435\u043d\u0430:",
+        lbl_gc_servers: "\u0421\u043f\u0438\u0441\u043e\u043a GC/DC \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432 (\u0447\u0435\u0440\u0435\u0437 \u0437\u0430\u043f\u044f\u0442\u0443\u044e):",
         lbl_domain: "\u0414\u043e\u043c\u0435\u043d (FQDN):",
         lbl_netbios: "NetBIOS \u0434\u043e\u043c\u0435\u043d:",
         lbl_user: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:",
@@ -426,7 +429,7 @@ function clampNumber(v, defVal, minV, maxV){
 function saveSettings(){
     try{
         var data = {
-            server:val("cfgServer"),domain:val("cfgDomain"),netbios:val("cfgNetbios"),
+            server:val("cfgServer"),gcServers:val("cfgGcServers"),domain:val("cfgDomain"),netbios:val("cfgNetbios"),
             user:val("cfgUser"),srvUser:val("cfgSrvUser"),ouWork:val("cfgOuWork"),ouSrv:val("cfgOuSrv"),
             pass:"",srvPass:"",threads:val("cfgThreads"),timeout:val("cfgTimeout"),
             hardTimeout:val("cfgHardTimeout"),probeWinrm:val("cfgProbeWinrm"),probeFast:val("cfgProbeFast"),networkLimit:val("cfgNetLimit"),
@@ -461,6 +464,7 @@ function loadSettings(){
 function applySettings(d){
     if(!d) return;
     if(d.server) $("cfgServer").value=d.server;
+    if(d.gcServers) $("cfgGcServers").value=d.gcServers;
     if(d.domain) $("cfgDomain").value=d.domain;
     if(d.netbios) $("cfgNetbios").value=d.netbios;
     if(d.user) $("cfgUser").value=d.user;
@@ -527,7 +531,7 @@ function doStart(){
     if(!adPass && srvPass) adPass = srvPass;
 
     var config={scan:{
-        ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:adUser,password:adPass},
+        ad_config:{server:val("cfgServer"),gc_servers:val("cfgGcServers"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:adUser,password:adPass},
         server_ad_config:{username:srvUser,password:srvPass},
         workstations_ou:val("cfgOuWork"),servers_ou:val("cfgOuSrv"),
         max_threads:Math.round(clampNumber(val("cfgThreads"),30,1,200)),
