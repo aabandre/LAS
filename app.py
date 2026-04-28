@@ -528,30 +528,21 @@ class Scanner:
         prefer_rpc_first = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
         rpc_enabled = bool(self.config.get("use_rpc_fallback", False)) and bool(ports.get("445_smb"))
         rpc_adaptive = bool(self.config.get("use_rpc_adaptive", True))
-
-        def rpc_allowed():
-            if not rpc_enabled:
-                return False
-            if not rpc_adaptive:
-                return True
-            return not ports.get("5985_winrm") and not ports.get("5986_winrm_ssl")
-
-        plan = []
-        if prefer_rpc_first and rpc_allowed():
-            plan.append(("RPC-SAMR-legacy-priority", lambda: self._run_rpc_with_limit(target_host, comp_info)))
-        if allow_winrm and ports.get("5985_winrm"):
-            plan.append(("WinRM", lambda: self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)))
-        if allow_winrm and ports.get("5986_winrm_ssl"):
-            plan.append(("WinRM-SSL", lambda: self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)))
-        if bool(self.config.get("use_wmi_fallback", False)):
-            plan.append(("WMI", lambda: self._try_wmi(target_host, comp_info=comp_info)))
-        if rpc_allowed() and not prefer_rpc_first:
-            plan.append(("RPC-SAMR", lambda: self._run_rpc_with_limit(target_host, comp_info)))
-        elif rpc_enabled and rpc_adaptive and (ports.get("5985_winrm") or ports.get("5986_winrm_ssl")):
-            return None, None, ["RPC-SAMR skipped (adaptive mode: WinRM open)"]
-
         details = []
-        for step_name, step_fn in plan:
+        winrm_open = bool(ports.get("5985_winrm") or ports.get("5986_winrm_ssl"))
+        winrm_failed = False
+
+        pre_plan = []
+        if prefer_rpc_first and rpc_enabled and (not rpc_adaptive or not winrm_open):
+            pre_plan.append(("RPC-SAMR-legacy-priority", lambda: self._run_rpc_with_limit(target_host, comp_info)))
+        if allow_winrm and ports.get("5985_winrm"):
+            pre_plan.append(("WinRM", lambda: self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)))
+        if allow_winrm and ports.get("5986_winrm_ssl"):
+            pre_plan.append(("WinRM-SSL", lambda: self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)))
+        if bool(self.config.get("use_wmi_fallback", False)):
+            pre_plan.append(("WMI", lambda: self._try_wmi(target_host, comp_info=comp_info)))
+
+        for step_name, step_fn in pre_plan:
             t0 = time.time()
             method, payload = step_fn()
             if method:
@@ -563,8 +554,29 @@ class Scanner:
 
             reason = str(payload or "empty")[:220]
             details.append(step_name + ": " + reason)
+            if step_name.startswith("WinRM"):
+                winrm_failed = True
             if self._is_fatal_enum_error(reason):
                 break
+
+        allow_rpc_after_winrm_error = bool(self.config.get("adaptive_rpc_on_winrm_error", True))
+        rpc_should_run = (
+            rpc_enabled and (
+                (not rpc_adaptive) or
+                (not winrm_open) or
+                (allow_rpc_after_winrm_error and winrm_open and winrm_failed)
+            )
+        )
+        if rpc_should_run and not prefer_rpc_first:
+            t0 = time.time()
+            method, payload = self._run_rpc_with_limit(target_host, comp_info)
+            if method:
+                metrics.add_method_timing(method, time.time() - t0)
+                return method, payload, details
+            reason = str(payload or "empty")[:220]
+            details.append("RPC-SAMR: " + reason)
+        elif rpc_enabled and rpc_adaptive and winrm_open and not winrm_failed:
+            details.append("RPC-SAMR skipped (adaptive mode: WinRM open and healthy)")
 
         return None, None, details
 
@@ -3224,6 +3236,7 @@ async def start_scan(request: Request):
     cfg["expand_unknown_domain_accounts"] = bool(cfg.get("expand_unknown_domain_accounts", False))
     cfg["use_rpc_fallback"] = bool(cfg.get("use_rpc_fallback", True))
     cfg["use_rpc_adaptive"] = bool(cfg.get("use_rpc_adaptive", True))
+    cfg["adaptive_rpc_on_winrm_error"] = bool(cfg.get("adaptive_rpc_on_winrm_error", True))
 
     if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
         return JSONResponse({"error": "Missing AD server/username"}, status_code=400)

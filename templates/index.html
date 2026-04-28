@@ -136,6 +136,7 @@
             <label><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
             <label><input type="checkbox" id="cfgExpandUnknown"> <span data-i18n="lbl_expand_unknown">Expand unknown/account domain entries (slower)</span></label>
             <label><input type="checkbox" id="cfgRpcFallback" checked> <span data-i18n="lbl_rpc_fallback">Enable RPC fallback (SMB)</span></label>
+            <label><input type="checkbox" id="cfgAdaptiveRpcOnWinrmError" checked> <span data-i18n="lbl_adaptive_rpc_on_winrm_error">If WinRM fails, still try RPC fallback</span></label>
             <label><input type="checkbox" id="cfgWmiFallback"> <span data-i18n="lbl_wmi_fallback">Enable WMI fallback (slower)</span></label>
             <label><input type="checkbox" id="cfgDebugLog"> <span data-i18n="lbl_debug_log">Enable debug log (verbose reasons)</span></label>
         </div>
@@ -215,6 +216,7 @@ var LANG = {
         lbl_expand: "Expand domain groups via LDAP",
         lbl_expand_unknown: "Expand unknown/account domain entries (slower)",
         lbl_rpc_fallback: "Enable RPC fallback (SMB)",
+        lbl_adaptive_rpc_on_winrm_error: "If WinRM fails, still try RPC fallback",
         lbl_wmi_fallback: "Enable WMI fallback (slower)",
         lbl_debug_log: "Enable debug log (verbose reasons)",
         preset_hint_stable: "⚡ Stable Fast: fastest mode, WinRM-only.",
@@ -284,6 +286,7 @@ var LANG = {
         lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP",
         lbl_expand_unknown: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c unknown/account \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 (\u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0435\u0435)",
         lbl_rpc_fallback: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c RPC fallback (SMB)",
+        lbl_adaptive_rpc_on_winrm_error: "\u0415\u0441\u043b\u0438 WinRM \u0443\u043f\u0430\u043b, \u0432\u0441\u0451 \u0440\u0430\u0432\u043d\u043e \u043f\u0440\u043e\u0431\u043e\u0432\u0430\u0442\u044c RPC fallback",
         lbl_wmi_fallback: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c WMI fallback (\u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0435\u0435)",
         lbl_debug_log: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c debug-\u043b\u043e\u0433 (\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u044b\u0435 \u043f\u0440\u0438\u0447\u0438\u043d\u044b)",
         preset_hint_stable: "\u26a1 Stable Fast: \u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u0438, \u0442\u043e\u043b\u044c\u043a\u043e WinRM.",
@@ -445,6 +448,7 @@ function saveSettings(){
             expand:$("cfgExpand").checked,
             expandUnknown:$("cfgExpandUnknown").checked,
             rpcFallback:$("cfgRpcFallback").checked,
+            adaptiveRpcOnWinrmError:$("cfgAdaptiveRpcOnWinrmError").checked,
             wmiFallback:$("cfgWmiFallback").checked,
             debugLog:$("cfgDebugLog").checked
         };
@@ -491,6 +495,7 @@ function applySettings(d){
     if(d.hasOwnProperty("expand")) $("cfgExpand").checked=asBool(d.expand, true);
     if(d.hasOwnProperty("expandUnknown")) $("cfgExpandUnknown").checked=asBool(d.expandUnknown, false);
     if(d.hasOwnProperty("rpcFallback")) $("cfgRpcFallback").checked=asBool(d.rpcFallback, true);
+    if(d.hasOwnProperty("adaptiveRpcOnWinrmError")) $("cfgAdaptiveRpcOnWinrmError").checked=asBool(d.adaptiveRpcOnWinrmError, true);
     if(d.hasOwnProperty("wmiFallback")) $("cfgWmiFallback").checked=asBool(d.wmiFallback, false);
     if(d.hasOwnProperty("debugLog")) $("cfgDebugLog").checked=asBool(d.debugLog, false)
 }
@@ -550,6 +555,7 @@ function doStart(){
         expand_unknown_domain_accounts:$("cfgExpandUnknown").checked,
         use_rpc_fallback:$("cfgRpcFallback").checked,
         use_rpc_adaptive:true,
+        adaptive_rpc_on_winrm_error:$("cfgAdaptiveRpcOnWinrmError").checked,
         use_wmi_fallback:$("cfgWmiFallback").checked,
         debug_log:$("cfgDebugLog").checked
     }};
@@ -583,6 +589,7 @@ function applyStableFastPreset(){
     $("cfgExpandGroupsCap").value = 8;
     $("cfgExpandMembersCap").value = 1200;
     $("cfgRpcFallback").checked = false;
+    $("cfgAdaptiveRpcOnWinrmError").checked = true;
     $("cfgWmiFallback").checked = false;
     $("cfgExpand").checked = true;
     $("cfgExpandUnknown").checked = false;
@@ -600,6 +607,7 @@ function applyReliableFastPreset(){
     $("cfgExpandGroupsCap").value = 12;
     $("cfgExpandMembersCap").value = 2000;
     $("cfgRpcFallback").checked = true;
+    $("cfgAdaptiveRpcOnWinrmError").checked = true;
     $("cfgWmiFallback").checked = false;
     $("cfgExpand").checked = true;
     $("cfgExpandUnknown").checked = false;
