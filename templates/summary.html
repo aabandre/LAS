@@ -360,6 +360,13 @@ function renderExpandableList(items,labelOne,labelMany){
     var lbl=count===1?labelOne:labelMany;
     return "<details class=\"cell-details\"><summary>"+count+" "+lbl+" · "+shortList+"…</summary><div class=\"full-list\">"+fullList+"</div></details>";
 }
+function renderExpandableText(text,label){
+    var clean=String(text||"").trim();
+    if(!clean)return "<span style=\"color:#9aa5b5\">-</span>";
+    if(clean.length<70)return "<span>"+escapeHtml(clean)+"</span>";
+    var shortText=escapeHtml(clean.slice(0,70));
+    return "<details class=\"cell-details\"><summary>"+label+" · "+shortText+"…</summary><div class=\"full-list\">"+escapeHtml(clean)+"</div></details>";
+}
 function pct(v,total){if(!total)return 0;return Math.round((v/total)*1000)/10}
 function isLA(s){return s==="administrator"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440"}
 function isBuiltinName(s){return isLA(s)||s==="administrators"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b"||s==="guests"||s==="\u0433\u043e\u0441\u0442\u0438"}
@@ -470,10 +477,11 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         var isBI=a.is_builtin===true||isBuiltinName(short),isLAd=a.hasOwnProperty("is_local_admin")?a.is_local_admin===true:isLA(short);
         var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=isGroupType(aType);
         var tagT,tagC;if(isLAd){tagT="local-admin";tagC="tag-local-admin"}else if(isGrp){tagT="group";tagC="tag-nested"}else if(isBI){tagT="builtin";tagC="tag-builtin"}else{tagT="custom";tagC="tag-risk"}
+        var accountSafe=escapeHtml(a.account||"");
         var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",machineArr=(a.machines||[]),mList=machineArr.join(", ");
-        var viaArr=splitList(via),viaView=renderExpandableList(viaArr,"group","groups"),machinesView=renderExpandableList(machineArr,"host","hosts");
+        var viaView=renderExpandableText(via,"groups"),machinesView=renderExpandableList(machineArr,"host","hosts");
         html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
-            +"<td>"+(i+1)+"</td><td>"+a.account+" "+tag+"</td><td>"+tag+"</td>"
+            +"<td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
             +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td></tr>"}
     $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;adminCurrentPage=1;filterAdmins()}

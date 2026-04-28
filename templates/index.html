@@ -455,9 +455,14 @@ function doStart(){
     if($("grpWinRm").checked) groupTargets.push("S-1-5-32-580");
     if(!groupTargets.length){ alert(t("select_group")); return; }
 
+    var adUser = val("cfgUser"), adPass = val("cfgPass"), srvUser = val("cfgSrvUser"), srvPass = val("cfgSrvPass");
+    if(!srvUser && adUser) srvUser = adUser;
+    if(!srvPass && adPass) srvPass = adPass;
+    if(!adPass && srvPass) adPass = srvPass;
+
     var config={scan:{
-        ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:val("cfgUser"),password:val("cfgPass")},
-        server_ad_config:{username:val("cfgSrvUser"),password:val("cfgSrvPass")},
+        ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:adUser,password:adPass},
+        server_ad_config:{username:srvUser,password:srvPass},
         workstations_ou:val("cfgOuWork"),servers_ou:val("cfgOuSrv"),
         max_threads:parseInt(val("cfgThreads"),10)||30,
         host_timeout:parseInt(val("cfgTimeout"),10)||40,

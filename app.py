@@ -2920,6 +2920,18 @@ async def start_scan(request: Request):
     work_ou = str(cfg.get("workstations_ou") or "").strip()
     srv_ou = str(cfg.get("servers_ou") or "").strip()
 
+    # Credentials fallback to reduce operator friction:
+    # - If server creds are omitted, reuse workstation creds.
+    # - If workstation password is omitted but server password is present, reuse it.
+    if not str(srv_cfg.get("username") or "").strip() and str(ad_cfg.get("username") or "").strip():
+        srv_cfg["username"] = ad_cfg.get("username")
+    if not str(srv_cfg.get("password") or "").strip() and str(ad_cfg.get("password") or "").strip():
+        srv_cfg["password"] = ad_cfg.get("password")
+    if not str(ad_cfg.get("password") or "").strip() and str(srv_cfg.get("password") or "").strip():
+        ad_cfg["password"] = srv_cfg.get("password")
+    cfg["ad_config"] = ad_cfg
+    cfg["server_ad_config"] = srv_cfg
+
     if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
         return JSONResponse({"error": "Missing AD server/username"}, status_code=400)
 
