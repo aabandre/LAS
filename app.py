@@ -489,102 +489,78 @@ class Scanner:
                 candidates.append(val)
         return candidates
 
+    def _is_fatal_enum_error(self, text):
+        msg = str(text or "").lower()
+        fatal_markers = (
+            "netuseadd", "error 66", " 66", "2457", "clock skew",
+            "часы данного сервера не синхронизованы",
+            "неверно указан тип сетевого ресурса",
+            "access denied", "доступ запрещен",
+            "invalid credentials", "logon failure",
+        )
+        return any(m in msg for m in fatal_markers)
+
+    def _run_rpc_with_limit(self, target_host, comp_info):
+        sem = getattr(self, "rpc_semaphore", None)
+        if sem is None:
+            return self._try_rpc_samr(target_host, comp_info=comp_info)
+        acquired = False
+        try:
+            while not sem.acquire(timeout=0.5):
+                if self.cancelled:
+                    return (None, "RPC-SAMR: cancelled")
+            acquired = True
+            return self._try_rpc_samr(target_host, comp_info=comp_info)
+        finally:
+            if acquired:
+                sem.release()
+
     def _collect_members_for_target(self, target_host, comp_info, ports):
-        members = None
-        method = None
-        details = []
         os_name = str((comp_info or {}).get("os") or "").lower()
         is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
-        prefer_rpc = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
+        allow_winrm = (not is_legacy) or bool(self.config.get("legacy_allow_winrm", False))
+        prefer_rpc_first = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
+        rpc_enabled = bool(self.config.get("use_rpc_fallback", False)) and bool(ports.get("445_smb"))
+        rpc_adaptive = bool(self.config.get("use_rpc_adaptive", True))
 
-        rpc_enabled = bool(self.config.get("use_rpc_fallback", False))
-        rpc_adaptive = bool(self.config.get("use_rpc_adaptive", False))
-
-        def _rpc_allowed_now():
-            if not rpc_enabled or not ports.get("445_smb"):
+        def rpc_allowed():
+            if not rpc_enabled:
                 return False
             if not rpc_adaptive:
                 return True
-            # Adaptive mode: attempt RPC only when WinRM is unavailable.
             return not ports.get("5985_winrm") and not ports.get("5986_winrm_ssl")
 
-        def _run_rpc():
-            sem = getattr(self, "rpc_semaphore", None)
-            if sem is None:
-                return self._try_rpc_samr(target_host, comp_info=comp_info)
-            acquired = False
-            try:
-                while not sem.acquire(timeout=0.5):
-                    if self.cancelled:
-                        return (None, "RPC-SAMR: cancelled")
-                acquired = True
-                return self._try_rpc_samr(target_host, comp_info=comp_info)
-            finally:
-                if acquired:
-                    sem.release()
+        plan = []
+        if prefer_rpc_first and rpc_allowed():
+            plan.append(("RPC-SAMR-legacy-priority", lambda: self._run_rpc_with_limit(target_host, comp_info)))
+        if allow_winrm and ports.get("5985_winrm"):
+            plan.append(("WinRM", lambda: self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)))
+        if allow_winrm and ports.get("5986_winrm_ssl"):
+            plan.append(("WinRM-SSL", lambda: self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)))
+        if bool(self.config.get("use_wmi_fallback", False)):
+            plan.append(("WMI", lambda: self._try_wmi(target_host, comp_info=comp_info)))
+        if rpc_allowed() and not prefer_rpc_first:
+            plan.append(("RPC-SAMR", lambda: self._run_rpc_with_limit(target_host, comp_info)))
+        elif rpc_enabled and rpc_adaptive and (ports.get("5985_winrm") or ports.get("5986_winrm_ssl")):
+            return None, None, ["RPC-SAMR skipped (adaptive mode: WinRM open)"]
 
-        if prefer_rpc and _rpc_allowed_now():
-            mt0 = time.time()
-            m, r = _run_rpc()
-            if m:
-                method = m + "-legacy-priority"
-                members = r
-                metrics.add_method_timing(method, time.time() - mt0)
-                return method, members, details
-            details.append("Legacy RPC-SAMR: " + str(r)[:200])
+        details = []
+        for step_name, step_fn in plan:
+            t0 = time.time()
+            method, payload = step_fn()
+            if method:
+                metric_name = method + ("-legacy-priority" if step_name == "RPC-SAMR-legacy-priority" else "")
+                metrics.add_method_timing(metric_name, time.time() - t0)
+                if step_name == "RPC-SAMR-legacy-priority":
+                    method = method + "-legacy-priority"
+                return method, payload, details
 
-        allow_winrm = not is_legacy or bool(self.config.get("legacy_allow_winrm", False))
-        if allow_winrm and ports.get('5985_winrm'):
-            for attempt in range(2):
-                mt0 = time.time()
-                m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)
-                if m:
-                    method = m
-                    members = r
-                    metrics.add_method_timing(m, time.time() - mt0)
-                    break
-                if attempt == 0 and r and 'timeout' in str(r).lower():
-                    time.sleep(1)
-                    continue
-                details.append('WinRM: ' + str(r)[:200])
+            reason = str(payload or "empty")[:220]
+            details.append(step_name + ": " + reason)
+            if self._is_fatal_enum_error(reason):
                 break
 
-        if members is None and allow_winrm and ports.get('5986_winrm_ssl'):
-            mt0 = time.time()
-            m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)
-            if m:
-                method = m
-                members = r
-                metrics.add_method_timing(m + '-SSL', time.time() - mt0)
-            else:
-                details.append('WinRM-SSL: ' + str(r)[:200])
-
-        if members is None and bool(self.config.get("use_wmi_fallback", False)):
-            mt0 = time.time()
-            m, r = self._try_wmi(target_host, comp_info=comp_info)
-            if m:
-                method = m
-                members = r
-                metrics.add_method_timing(m, time.time() - mt0)
-            else:
-                details.append(str(r)[:200])
-        elif members is None:
-            details.append("WMI fallback skipped by config")
-
-        if members is None and ports.get('445_smb') and rpc_enabled:
-            if rpc_adaptive and (ports.get("5985_winrm") or ports.get("5986_winrm_ssl")):
-                details.append("RPC-SAMR skipped (adaptive mode: WinRM open)")
-                return method, members, details
-            mt0 = time.time()
-            m, r = _run_rpc()
-            if m:
-                method = m
-                members = r
-                metrics.add_method_timing(m, time.time() - mt0)
-            else:
-                details.append(str(r)[:200])
-
-        return method, members, details
+        return None, None, details
 
     def ensure_ldap(self):
         if self.ldap_conn and self.ldap_conn.bound:
@@ -2039,6 +2015,7 @@ $res | ConvertTo-Json -Compress
             "members": [], "error": None, "ip": None, "ports": {},
             "scan_time_sec": 0, "risk": None,
         }
+        sem_acquired = False
         try:
             if self.cancelled:
                 raise RuntimeError("Cancelled")
@@ -2152,12 +2129,21 @@ $res | ConvertTo-Json -Compress
             # Start hard-timeout countdown only after entering network work section.
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
-            scan_targets = self._host_candidates(computer, ip)
+            sem = getattr(self, "net_semaphore", None)
+            if sem is not None:
+                queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
+                wait_started = time.time()
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        raise RuntimeError("Cancelled")
+                    if time.time() - wait_started > queue_timeout:
+                        raise RuntimeError("Network queue timeout waiting for worker slot")
+                sem_acquired = True
+
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+            targets = self._host_candidates(computer, ip)
             if not ip:
-                scan_targets = [computer]
-            members = None
-            method = None
-            details = []
+                targets = [computer]
 
             aggregate_ports = {
                 "5985_winrm": False,
@@ -2165,106 +2151,92 @@ $res | ConvertTo-Json -Compress
                 "445_smb": False,
                 "3389_rdp": False,
             }
+            details = []
+            resolved_method = None
+            resolved_members = None
 
-            for idx, candidate in enumerate(scan_targets):
+            for candidate in targets:
                 if time.time() >= deadline:
-                    details.append("Host hard timeout reached before candidate scan")
+                    details.append("Host hard timeout reached")
                     break
-                ports = self._probe_ports_fast(candidate)
-                for key, value in ports.items():
-                    aggregate_ports[key] = aggregate_ports[key] or value
 
-                if idx == 0:
-                    result["ports"] = ports
+                ports = self._probe_ports_fast(candidate)
+                for key in aggregate_ports:
+                    aggregate_ports[key] = aggregate_ports[key] or bool(ports.get(key))
 
                 try:
                     method, members, try_details = self._collect_members_for_target(candidate, comp_info, ports)
-                except NameError as ne:
-                    # Defensive compatibility: prevent one buggy strategy from breaking the whole host scan.
-                    logger.exception("Internal NameError while scanning %s via %s: %s", computer, candidate, ne)
-                    method, members, try_details = (None, None, ["Internal scanner error recovered: " + str(ne)])
+                except Exception as exc:
+                    logger.exception("Collector failed for %s via %s: %s", computer, candidate, exc)
+                    method, members, try_details = (None, None, ["collector error: " + str(exc)])
 
                 if members is not None:
+                    resolved_method = method
+                    resolved_members = members
                     if candidate != computer:
                         result["computer_resolved"] = candidate
                     break
 
-                if try_details:
-                    details.extend([candidate + ": " + d for d in try_details])
-                    fatal_markers = (
-                        "netuseadd", "неверно указан тип сетевого ресурса",
-                        "часы данного сервера не синхронизованы",
-                        "access denied", "доступ запрещен",
-                        "error 66", " 66", "2457", "clock skew",
-                    )
-                    joined = " | ".join(str(x).lower() for x in try_details)
-                    if any(marker in joined for marker in fatal_markers):
-                        break
-
-            if members is None and time.time() >= deadline and not details:
-                details.append("Host hard timeout reached")
+                for item in (try_details or []):
+                    details.append(candidate + ": " + str(item))
+                if any(self._is_fatal_enum_error(x) for x in (try_details or [])):
+                    break
 
             result["ports"] = aggregate_ports
 
-            if members is not None:
-                result["method"] = method
-                classified = []
-                for entry in members:
-                    if isinstance(entry, dict):
-                        name = entry.get("name", "")
-                        ot = entry.get("type", "unknown")
-                        src_group = entry.get("source_group")
-                    else:
-                        name = str(entry)
-                        ot = "unknown"
-                        src_group = None
-                    name = name.strip()
-                    if name:
-                        cm = self._classify_member(name, ot)
-                        if src_group:
-                            cm["source_group"] = src_group
-                        classified.append(cm)
-
-                classified = self._expand_with_domain_aliases(
-                    classified,
-                    self.config.get("domain_aliases", []),
-                )
-
-                try:
-                    if self.config.get("expand_groups", True):
-                        classified = self._expand_domain_groups(classified)
-                except Exception as e:
-                    logger.debug("Group expansion error on %s: %s", computer, e)
-
-                result["members"] = classified
-                self._add_members(len(result["members"]))
-
-                allowed = set(self.config.get("allowed_admins", []))
-                result["risk"] = calc_risk_score(result["members"], allowed)
-            else:
-                ports = result["ports"]
+            if resolved_members is None:
                 if not ip:
-                    msg = "DNS failed"
-                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and not aggregate_ports["445_smb"] and not aggregate_ports["3389_rdp"]:
-                    msg = "Host OFFLINE. IP: " + str(ip)
-                elif any("access is denied" in str(d).lower() or "access denied" in str(d).lower() for d in details):
-                    msg = "Host ALIVE, but access denied for remote enumeration"
-                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["445_smb"]:
-                    msg = "Host ALIVE (SMB), WinRM CLOSED"
-                elif not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"] and aggregate_ports["3389_rdp"]:
-                    msg = "Host ALIVE (RDP), WinRM CLOSED"
+                    base_error = "DNS failed"
+                elif not any(aggregate_ports.values()):
+                    base_error = "Host OFFLINE. IP: " + str(ip)
+                elif any("access denied" in str(d).lower() for d in details):
+                    base_error = "Host ALIVE, but access denied for remote enumeration"
+                elif aggregate_ports["445_smb"] and not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"]:
+                    base_error = "Host ALIVE (SMB), WinRM CLOSED"
+                elif aggregate_ports["3389_rdp"] and not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"]:
+                    base_error = "Host ALIVE (RDP), WinRM CLOSED"
                 else:
-                    msg = "All methods failed"
+                    base_error = "All methods failed"
                 if details:
-                    msg += " | " + "; ".join(details)
-                raise RuntimeError(msg)
+                    base_error += " | " + "; ".join(details)
+                raise RuntimeError(base_error)
+
+            result["method"] = resolved_method
+            classified = []
+            for entry in resolved_members:
+                if isinstance(entry, dict):
+                    name = str(entry.get("name", "")).strip()
+                    typ = entry.get("type", "unknown")
+                    src_group = entry.get("source_group")
+                else:
+                    name = str(entry).strip()
+                    typ = "unknown"
+                    src_group = None
+                if not name:
+                    continue
+                classified_member = self._classify_member(name, typ)
+                if src_group:
+                    classified_member["source_group"] = src_group
+                classified.append(classified_member)
+
+            classified = self._expand_with_domain_aliases(classified, self.config.get("domain_aliases", []))
+            if self.config.get("expand_groups", True):
+                try:
+                    classified = self._expand_domain_groups(classified)
+                except Exception as expand_err:
+                    logger.debug("Group expansion error on %s: %s", computer, expand_err)
+
+            result["members"] = classified
+            self._add_members(len(classified))
+            result["risk"] = calc_risk_score(classified, set(self.config.get("allowed_admins", [])))
+
         except Exception as e:
             if str(e) != "Cancelled":
                 result["error"] = str(e)
                 self._inc_errors()
                 logger.warning("FAIL %s: %s", computer, e)
         finally:
-            if 'sem_acquired' in locals() and sem_acquired and getattr(self, "net_semaphore", None) is not None:
+            if sem_acquired and getattr(self, "net_semaphore", None) is not None:
                 try:
                     self.net_semaphore.release()
                 except Exception:
