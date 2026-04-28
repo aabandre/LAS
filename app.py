@@ -496,7 +496,7 @@ class Scanner:
         is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
         prefer_rpc = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
 
-        if prefer_rpc and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', True)):
+        if prefer_rpc and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', False)):
             mt0 = time.time()
             m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
             if m:
@@ -544,7 +544,7 @@ class Scanner:
         elif members is None:
             details.append("WMI fallback skipped by config")
 
-        if members is None and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', True)):
+        if members is None and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', False)):
             mt0 = time.time()
             m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
             if m:
@@ -2088,6 +2088,21 @@ $res | ConvertTo-Json -Compress
             # Start hard-timeout countdown only after entering network work section.
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                wait_started = time.time()
+                queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        raise RuntimeError("Cancelled")
+                    if time.time() - wait_started > queue_timeout:
+                        raise RuntimeError("Network queue timeout waiting for worker slot")
+                sem_acquired = True
+
+            # Start hard-timeout countdown only after entering network work section.
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+
             scan_targets = self._host_candidates(computer, ip)
             if not ip:
                 scan_targets = [computer]
@@ -2135,9 +2150,6 @@ $res | ConvertTo-Json -Compress
                     joined = " | ".join(str(x).lower() for x in try_details)
                     if any(marker in joined for marker in fatal_markers):
                         break
-
-            if members is None and time.time() >= deadline and not details:
-                details.append("Host hard timeout reached")
 
             if members is None and time.time() >= deadline and not details:
                 details.append("Host hard timeout reached")
