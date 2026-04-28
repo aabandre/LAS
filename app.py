@@ -317,6 +317,7 @@ class Scanner:
         self.probe_executor = None
         self.net_semaphore = None
         self.rpc_semaphore = None
+        self._group_expand_cache = {}
         self.config = {}
 
     def _load_last_summary(self):
@@ -769,12 +770,20 @@ class Scanner:
             return []
 
         group_key = (str(group_name or "").lower(), str(domain_hint or "").lower())
+        cache = getattr(self, "_group_expand_cache", None)
+        if isinstance(cache, dict) and group_key in cache:
+            cached = cache.get(group_key)
+            if cached is None:
+                return None
+            return [dict(x) for x in cached]
         if group_key in seen_groups:
             return []
         seen_groups.add(group_key)
 
         group_entry = self._resolve_group_entry(group_name, domain_hint=domain_hint)
         if group_entry is None:
+            if isinstance(cache, dict):
+                cache[group_key] = None
             return None
 
         group_dn = str(group_entry.distinguishedName) if hasattr(group_entry, "distinguishedName") and group_entry.distinguishedName else ""
@@ -790,6 +799,7 @@ class Scanner:
         attrs = ["objectClass", "sAMAccountName", "cn", "userPrincipalName", "distinguishedName"]
         members = []
         seen_names = set()
+        member_cap = self._cfg_int("expand_group_member_cap", 2000, minimum=100, maximum=20000)
 
         try:
             self.ensure_ldap_gc()
@@ -802,6 +812,8 @@ class Scanner:
             )
             while True:
                 for entry in self.ldap_gc_conn.entries:
+                    if len(members) >= member_cap:
+                        break
                     name = self._entry_account_name(entry)
                     if not name:
                         continue
@@ -820,6 +832,9 @@ class Scanner:
                     else:
                         otype = "unknown"
                     members.append({"name": name, "type": otype})
+                if len(members) >= member_cap:
+                    logger.debug("Group expansion cap reached for %s (%d)", group_name, member_cap)
+                    break
 
                 cookie = (
                     self.ldap_gc_conn.result
@@ -842,6 +857,8 @@ class Scanner:
             logger.debug("Transitive GC member query failed for %s: %s", group_name, e)
 
         if members:
+            if isinstance(cache, dict):
+                cache[group_key] = [dict(x) for x in members]
             return members
 
         # Fallback: direct member list (если matching-rule не поддерживается)
@@ -854,6 +871,12 @@ class Scanner:
                     continue
                 seen_names.add(nm)
                 members.append(item)
+                if len(members) >= member_cap:
+                    break
+            if len(members) >= member_cap:
+                break
+        if isinstance(cache, dict):
+            cache[group_key] = [dict(x) for x in members]
         return members
 
     def _expand_domain_groups(self, members_list):
@@ -864,6 +887,9 @@ class Scanner:
 
         expanded = []
         seen_groups = set()
+        expanded_group_keys = set()
+        max_groups_per_host = self._cfg_int("expand_max_groups_per_host", 12, minimum=1, maximum=200)
+        expand_unknown_accounts = bool(self.config.get("expand_unknown_domain_accounts", False))
 
         for member in members_list:
             name = (member.get("name") or "").strip()
@@ -883,15 +909,27 @@ class Scanner:
             elif is_group:
                 # Некоторые WMI-методы возвращают доменные группы без префикса DOMAIN\\.
                 is_domainish = True
-            elif obj_type.lower() in ("unknown", "account") and account_name:
+            elif expand_unknown_accounts and obj_type.lower() in ("unknown", "account") and account_name:
                 # На части АРМ доменная группа приходит как generic Account/unknown без DOMAIN\.
                 short = account_name.split("\\", 1)[-1].lower()
                 is_domainish = short not in BUILTIN_ADMINS
 
-            if is_domainish and account_name and obj_type.lower() not in ("computer", "wellknowngroup"):
+            group_expand_key = ((domain_hint or domain).lower(), account_name.lower())
+            should_expand = (
+                is_domainish and account_name and
+                obj_type.lower() not in ("computer", "wellknowngroup") and
+                (is_group or expand_unknown_accounts) and
+                group_expand_key not in expanded_group_keys
+            )
+            if should_expand and len(expanded_group_keys) >= max_groups_per_host:
+                expanded.append(member)
+                continue
+
+            if should_expand:
                 try:
                     group_members = self._resolve_group_members(account_name, seen_groups, domain_hint=domain_hint)
                     if group_members:
+                        expanded_group_keys.add(group_expand_key)
                         member["type"] = "Group"
                         member["expanded_members"] = group_members
                         member["expanded_count"] = len(group_members)
@@ -3057,6 +3095,15 @@ async def start_scan(request: Request):
         cfg["rpc_parallel_limit"] = max(0, min(64, int(cfg.get("rpc_parallel_limit", 0))))
     except (TypeError, ValueError):
         cfg["rpc_parallel_limit"] = 0
+    try:
+        cfg["expand_max_groups_per_host"] = max(1, min(200, int(cfg.get("expand_max_groups_per_host", 12))))
+    except (TypeError, ValueError):
+        cfg["expand_max_groups_per_host"] = 12
+    try:
+        cfg["expand_group_member_cap"] = max(100, min(20000, int(cfg.get("expand_group_member_cap", 2000))))
+    except (TypeError, ValueError):
+        cfg["expand_group_member_cap"] = 2000
+    cfg["expand_unknown_domain_accounts"] = bool(cfg.get("expand_unknown_domain_accounts", False))
     cfg["use_rpc_fallback"] = bool(cfg.get("use_rpc_fallback", True))
     cfg["use_rpc_adaptive"] = bool(cfg.get("use_rpc_adaptive", True))
 
