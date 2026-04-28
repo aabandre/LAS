@@ -315,6 +315,7 @@ class Scanner:
         self.ldap_gc_conn = None
         self.executor = None
         self.probe_executor = None
+        self.net_semaphore = None
         self.config = {}
 
     def _load_last_summary(self):
@@ -2010,6 +2011,12 @@ $res | ConvertTo-Json -Compress
             result["ip"] = ip
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                sem.acquire()
+                sem_acquired = True
+
             scan_targets = self._host_candidates(computer, ip)
             members = None
             method = None
@@ -2110,6 +2117,12 @@ $res | ConvertTo-Json -Compress
                 result["error"] = str(e)
                 self._inc_errors()
                 logger.warning("FAIL %s: %s", computer, e)
+        finally:
+            if 'sem_acquired' in locals() and sem_acquired and getattr(self, "net_semaphore", None) is not None:
+                try:
+                    self.net_semaphore.release()
+                except Exception:
+                    pass
 
         result["scan_time_sec"] = round(time.time() - t0, 2)
         self.result_queue.put({"type": "machine", "data": result})
@@ -2197,9 +2210,17 @@ $res | ConvertTo-Json -Compress
                 max_w = min(max_cfg, hard_cap)
 
             self.executor = ThreadPoolExecutor(max_workers=max_w)
-            probe_workers = min(128, max(8, max_w * 4))
+            net_limit_cfg = int(config.get("network_limit", 0) or 0)
+            if net_limit_cfg > 0:
+                net_limit = max(1, min(net_limit_cfg, max_w))
+            else:
+                net_limit = max(4, min(24, max_w))
+            self.net_semaphore = threading.BoundedSemaphore(net_limit)
+
+            probe_workers = min(64, max(8, max_w * 2))
             self.probe_executor = ThreadPoolExecutor(max_workers=probe_workers)
             logger.info("Thread pool size: %d (requested=%d, cap=%d)", max_w, max_cfg, hard_cap)
+            logger.info("Network concurrency limit: %d", net_limit)
             logger.info("Port probe pool size: %d", probe_workers)
             futs = {}
             for c in unique:
@@ -2302,6 +2323,7 @@ $res | ConvertTo-Json -Compress
             if getattr(self, "probe_executor", None):
                 self.probe_executor.shutdown(wait=False, cancel_futures=True)
                 self.probe_executor = None
+            self.net_semaphore = None
             if self.ldap_conn:
                 try:
                     self.ldap_conn.unbind()
