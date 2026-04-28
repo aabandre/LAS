@@ -2026,6 +2026,21 @@ $res | ConvertTo-Json -Compress
             # Start hard-timeout countdown only after entering network work section.
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                wait_started = time.time()
+                queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        raise RuntimeError("Cancelled")
+                    if time.time() - wait_started > queue_timeout:
+                        raise RuntimeError("Network queue timeout waiting for worker slot")
+                sem_acquired = True
+
+            # Start hard-timeout countdown only after entering network work section.
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+
             scan_targets = self._host_candidates(computer, ip)
             members = None
             method = None
@@ -2553,6 +2568,16 @@ $res | ConvertTo-Json -Compress
         }
     def stop(self):
         self.cancelled = True
+        if self.executor:
+            try:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+        if getattr(self, "probe_executor", None):
+            try:
+                self.probe_executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         logger.info("Cancel requested")
 
 
