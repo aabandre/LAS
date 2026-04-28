@@ -33,6 +33,13 @@
         .card-inner{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:10px;text-align:center}
         .card-val{font-size:22px;font-weight:bold}
         .card-label{font-size:9px;color:#888;text-transform:uppercase;margin-top:2px}
+        .insights{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+        .insight{background:#fff;border:1px solid #dfe6f3;border-radius:6px;padding:8px 10px;min-width:220px;flex:1}
+        .insight-title{font-size:11px;color:#6f7d95;margin-bottom:4px;text-transform:uppercase}
+        .insight-val{font-size:20px;font-weight:700;color:#2d5f9f}
+        .insight-sub{font-size:11px;color:#7f8b9f}
+        .progress-mini{margin-top:6px;height:6px;background:#edf2fb;border-radius:999px;overflow:hidden}
+        .progress-mini > span{display:block;height:100%;background:#4a90d9}
         .c-blue{color:#4a90d9}.c-green{color:#5cb85c}.c-red{color:#d9534f}.c-orange{color:#f0ad4e}.c-purple{color:#9b59b6}.c-teal{color:#1abc9c}.c-gray{color:#95a5a6}.c-dark{color:#34495e}.c-pink{color:#e74c3c}
         .charts{overflow:hidden;margin-bottom:12px}
         .chart-box{float:left;width:20%;padding:3px}
@@ -72,6 +79,10 @@
         .admin-pager button{padding:3px 9px;font-size:12px;border:1px solid #4a90d9;background:#fff;color:#4a90d9;border-radius:3px;cursor:pointer}
         .admin-pager button[disabled]{opacity:.4;cursor:default}
         .admin-pager select{padding:3px 6px;border:1px solid #ccc;border-radius:3px}
+        .cell-details{font-size:10px}
+        .cell-details summary{cursor:pointer;color:#2d5f9f;font-weight:600;outline:none}
+        .cell-details[open] summary{margin-bottom:4px}
+        .cell-details .full-list{max-height:70px;overflow:auto;line-height:1.25;color:#666;word-break:break-word}
         .machine-filter{margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
         .machine-filter select,.machine-filter input{padding:4px 8px;font-size:12px;border:1px solid #ccc;border-radius:3px}
         .machine-detail{margin-top:10px;border:1px solid #e1e7f0;border-radius:4px;background:#fafcff;padding:10px}
@@ -128,6 +139,7 @@
 
     <div id="content" style="display:none">
         <div class="cards" id="summaryCards"></div>
+        <div class="insights" id="summaryInsights"></div>
         <div class="tabs" id="tabBar"></div>
 
         <div class="tab-content active" id="tabCharts">
@@ -332,6 +344,23 @@ function formatDuration(sec){
     if(m>0)return m+"m "+s+"s";
     return s+"s";
 }
+function escapeHtml(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;")}
+function splitList(txt){
+    if(!txt)return [];
+    var raw=String(txt).split(","),out=[];
+    for(var i=0;i<raw.length;i++){var v=raw[i].trim();if(v)out.push(v)}
+    return out;
+}
+function renderExpandableList(items,labelOne,labelMany){
+    var count=items.length;
+    if(count===0)return "<span style=\"color:#9aa5b5\">-</span>";
+    if(count<=2)return "<span>"+escapeHtml(items.join(", "))+"</span>";
+    var shortList=escapeHtml(items.slice(0,2).join(", "));
+    var fullList=escapeHtml(items.join(", "));
+    var lbl=count===1?labelOne:labelMany;
+    return "<details class=\"cell-details\"><summary>"+count+" "+lbl+" · "+shortList+"…</summary><div class=\"full-list\">"+fullList+"</div></details>";
+}
+function pct(v,total){if(!total)return 0;return Math.round((v/total)*1000)/10}
 function isLA(s){return s==="administrator"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440"}
 function isBuiltinName(s){return isLA(s)||s==="administrators"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b"||s==="guests"||s==="\u0433\u043e\u0441\u0442\u0438"}
 function isGroupType(tp){var t=(tp||"").toLowerCase();return t.indexOf("group")>-1||t.indexOf("nested")>-1||t.indexOf("\u0433\u0440\u0443\u043f\u043f")>-1}
@@ -418,7 +447,16 @@ function renderCards(){var d=SD,sb=d.severity_breakdown||{};
         {v:d.clean_machines_count||0,l:"card_clean",c:"c-teal"},{v:formatDuration(d.avg_scan_time_sec||0),l:"card_avg",c:"c-gray"},
         {v:formatDuration(d.max_scan_time_sec||0),l:"card_max",c:"c-dark"},{v:sb.critical||0,l:"card_critical",c:"c-pink"}];
     var h="";for(var i=0;i<items.length;i++){h+="<div class=\"card-sm\"><div class=\"card-inner\"><div class=\"card-val "+items[i].c+"\">"+items[i].v+"</div><div class=\"card-label\">"+t(items[i].l)+"</div></div></div>"}
-    $("summaryCards").innerHTML=h}
+    $("summaryCards").innerHTML=h;
+
+    var total=d.total_scanned||0,success=d.success||0,errors=d.errors||0,risky=d.risky_machines_count||0;
+    var errPct=pct(errors,total),riskPct=pct(risky,total),okPct=pct(success,total);
+    var insightHtml=
+        "<div class=\"insight\"><div class=\"insight-title\">Success rate</div><div class=\"insight-val\">"+okPct+"%</div><div class=\"insight-sub\">"+success+" / "+total+" hosts</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,okPct)+"%;background:#5cb85c\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">Error rate</div><div class=\"insight-val\">"+errPct+"%</div><div class=\"insight-sub\">"+errors+" hosts with errors</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,errPct)+"%;background:#d9534f\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">Risk coverage</div><div class=\"insight-val\">"+riskPct+"%</div><div class=\"insight-sub\">"+risky+" risky / "+(d.clean_machines_count||0)+" clean</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,riskPct)+"%;background:#f0ad4e\"></span></div></div>";
+    $("summaryInsights").innerHTML=insightHtml;
+}
 
 function drawPie(cid,lid,obj,colors){var cv=$(cid);if(!cv||!cv.getContext)return;var ctx=cv.getContext("2d"),w=cv.width,h=cv.height,cx=w/2,cy=h/2,r=Math.min(w,h)/2-6;ctx.clearRect(0,0,w,h);
     var keys=[],vals=[],total=0,k;for(k in obj){if(obj.hasOwnProperty(k)){keys.push(k);vals.push(obj[k]);total+=obj[k]}}
@@ -432,11 +470,12 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         var isBI=a.is_builtin===true||isBuiltinName(short),isLAd=a.hasOwnProperty("is_local_admin")?a.is_local_admin===true:isLA(short);
         var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=isGroupType(aType);
         var tagT,tagC;if(isLAd){tagT="local-admin";tagC="tag-local-admin"}else if(isGrp){tagT="group";tagC="tag-nested"}else if(isBI){tagT="builtin";tagC="tag-builtin"}else{tagT="custom";tagC="tag-risk"}
-        var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",mList=(a.machines||[]).join(", ");
+        var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",machineArr=(a.machines||[]),mList=machineArr.join(", ");
+        var viaArr=splitList(via),viaView=renderExpandableList(viaArr,"group","groups"),machinesView=renderExpandableList(machineArr,"host","hosts");
         html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
             +"<td>"+(i+1)+"</td><td>"+a.account+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
-            +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+via+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+mList+"</div></td></tr>"}
+            +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td></tr>"}
     $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;adminCurrentPage=1;filterAdmins()}
 
 function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false,oLG=$("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false;
