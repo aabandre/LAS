@@ -2073,7 +2073,24 @@ $res | ConvertTo-Json -Compress
             # Start hard-timeout countdown only after entering network work section.
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                wait_started = time.time()
+                queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        raise RuntimeError("Cancelled")
+                    if time.time() - wait_started > queue_timeout:
+                        raise RuntimeError("Network queue timeout waiting for worker slot")
+                sem_acquired = True
+
+            # Start hard-timeout countdown only after entering network work section.
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+
             scan_targets = self._host_candidates(computer, ip)
+            if not ip:
+                scan_targets = [computer]
             members = None
             method = None
             details = []
@@ -2110,6 +2127,17 @@ $res | ConvertTo-Json -Compress
 
                 if try_details:
                     details.extend([candidate + ": " + d for d in try_details])
+                    fatal_markers = (
+                        "netuseadd", "неверно указан тип сетевого ресурса",
+                        "часы данного сервера не синхронизованы",
+                        "access denied", "доступ запрещен",
+                    )
+                    joined = " | ".join(str(x).lower() for x in try_details)
+                    if any(marker in joined for marker in fatal_markers):
+                        break
+
+            if members is None and time.time() >= deadline and not details:
+                details.append("Host hard timeout reached")
 
             if members is None and time.time() >= deadline and not details:
                 details.append("Host hard timeout reached")
