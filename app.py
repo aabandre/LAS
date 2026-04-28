@@ -11,7 +11,7 @@ import glob
 import ipaddress
 from datetime import datetime
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from logging.handlers import RotatingFileHandler
 
 from fastapi import FastAPI, Request, HTTPException, Query
@@ -314,6 +314,9 @@ class Scanner:
         self.ldap_conn = None
         self.ldap_gc_conn = None
         self.executor = None
+        self.probe_executor = None
+        self.net_semaphore = None
+        self.rpc_semaphore = None
         self.config = {}
 
     def _load_last_summary(self):
@@ -388,6 +391,18 @@ class Scanner:
         with self._lock:
             self._error_count += 1
 
+    def _cfg_int(self, key, default, minimum=None, maximum=None):
+        raw = self.config.get(key, default)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = default
+        if minimum is not None:
+            value = max(minimum, value)
+        if maximum is not None:
+            value = min(maximum, value)
+        return value
+
     @staticmethod
     def port_open(host, port, timeout=2.0):
         try:
@@ -412,6 +427,38 @@ class Scanner:
             p3389 = fut3389.result()
 
         p5986 = self.port_open(host, 5986, 2.0) if not p5985 else False
+        return {
+            "5985_winrm": p5985,
+            "5986_winrm_ssl": p5986,
+            "445_smb": p445,
+            "3389_rdp": p3389,
+        }
+
+    def _probe_ports_fast(self, host):
+        try:
+            winrm_timeout = float(self.config.get("port_probe_timeout_winrm", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            winrm_timeout = 1.5
+        try:
+            fast_timeout = float(self.config.get("port_probe_timeout_fast", 0.6) or 0.6)
+        except (TypeError, ValueError):
+            fast_timeout = 1.0
+        winrm_timeout = max(0.5, min(10.0, winrm_timeout))
+        fast_timeout = max(0.2, min(5.0, fast_timeout))
+
+        probe_exec = getattr(self, "probe_executor", None)
+        if probe_exec:
+            f5985 = probe_exec.submit(self.port_open, host, 5985, winrm_timeout)
+            f445 = probe_exec.submit(self.port_open, host, 445, fast_timeout)
+            f3389 = probe_exec.submit(self.port_open, host, 3389, fast_timeout)
+            p5985 = f5985.result()
+            p445 = f445.result()
+            p3389 = f3389.result()
+        else:
+            p5985 = self.port_open(host, 5985, winrm_timeout)
+            p445 = self.port_open(host, 445, fast_timeout)
+            p3389 = self.port_open(host, 3389, fast_timeout)
+        p5986 = self.port_open(host, 5986, winrm_timeout) if not p5985 else False
         return {
             "5985_winrm": p5985,
             "5986_winrm_ssl": p5986,
@@ -446,8 +493,48 @@ class Scanner:
         members = None
         method = None
         details = []
+        os_name = str((comp_info or {}).get("os") or "").lower()
+        is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
+        prefer_rpc = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
 
-        if ports.get('5985_winrm'):
+        rpc_enabled = bool(self.config.get("use_rpc_fallback", False))
+        rpc_adaptive = bool(self.config.get("use_rpc_adaptive", False))
+
+        def _rpc_allowed_now():
+            if not rpc_enabled or not ports.get("445_smb"):
+                return False
+            if not rpc_adaptive:
+                return True
+            # Adaptive mode: attempt RPC only when WinRM is unavailable.
+            return not ports.get("5985_winrm") and not ports.get("5986_winrm_ssl")
+
+        def _run_rpc():
+            sem = getattr(self, "rpc_semaphore", None)
+            if sem is None:
+                return self._try_rpc_samr(target_host, comp_info=comp_info)
+            acquired = False
+            try:
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        return (None, "RPC-SAMR: cancelled")
+                acquired = True
+                return self._try_rpc_samr(target_host, comp_info=comp_info)
+            finally:
+                if acquired:
+                    sem.release()
+
+        if prefer_rpc and _rpc_allowed_now():
+            mt0 = time.time()
+            m, r = _run_rpc()
+            if m:
+                method = m + "-legacy-priority"
+                members = r
+                metrics.add_method_timing(method, time.time() - mt0)
+                return method, members, details
+            details.append("Legacy RPC-SAMR: " + str(r)[:200])
+
+        allow_winrm = not is_legacy or bool(self.config.get("legacy_allow_winrm", False))
+        if allow_winrm and ports.get('5985_winrm'):
             for attempt in range(2):
                 mt0 = time.time()
                 m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)
@@ -462,7 +549,7 @@ class Scanner:
                 details.append('WinRM: ' + str(r)[:200])
                 break
 
-        if members is None and ports.get('5986_winrm_ssl'):
+        if members is None and allow_winrm and ports.get('5986_winrm_ssl'):
             mt0 = time.time()
             m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)
             if m:
@@ -472,7 +559,7 @@ class Scanner:
             else:
                 details.append('WinRM-SSL: ' + str(r)[:200])
 
-        if members is None:
+        if members is None and bool(self.config.get("use_wmi_fallback", False)):
             mt0 = time.time()
             m, r = self._try_wmi(target_host, comp_info=comp_info)
             if m:
@@ -482,9 +569,12 @@ class Scanner:
             else:
                 details.append(str(r)[:200])
 
-        if members is None and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', True)):
+        if members is None and ports.get('445_smb') and rpc_enabled:
+            if rpc_adaptive and (ports.get("5985_winrm") or ports.get("5986_winrm_ssl")):
+                details.append("RPC-SAMR skipped (adaptive mode: WinRM open)")
+                return method, members, details
             mt0 = time.time()
-            m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
+            m, r = _run_rpc()
             if m:
                 method = m
                 members = r
@@ -903,7 +993,11 @@ class Scanner:
         scheme = "https" if use_ssl else "http"
         target = scheme + "://" + computer + ":" + str(port)
 
-        host_timeout = int(self.config.get("host_timeout", 40))
+        host_timeout = int(self.config.get("host_timeout", 20))
+        os_name = str((comp_info or {}).get("os") or "").lower()
+        is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
+        if is_legacy:
+            host_timeout = int(self.config.get("legacy_host_timeout", 10))
 
         return winrm.Session(
             target=target, auth=(username, cfg["password"]),
@@ -1737,9 +1831,13 @@ $res | ConvertTo-Json -Compress
                     return (True, "session user=" + smb_user)
                 except Exception as e1:
                     e1_text = _fmt_exc(e1)
+                    e1_lower = e1_text.lower()
                     last_err = smb_user + ": " + e1_text
+                    # Deterministic target/session errors: do not waste time on more retries.
+                    if " 66" in e1_lower or "error 66" in e1_lower or "2457" in e1_lower or "clock skew" in e1_lower:
+                        return (False, "fatal session error: " + last_err)
                     # Retry with NetUseDel only when this looks like an existing conflicting session.
-                    if "1219" not in e1_text and "multiple connections" not in e1_text.lower():
+                    if "1219" not in e1_text and "multiple connections" not in e1_lower:
                         continue
                     try:
                         try:
@@ -1946,7 +2044,24 @@ $res | ConvertTo-Json -Compress
             ip = dns_cache.resolve(computer)
             result["ip"] = ip
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                wait_started = time.time()
+                queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
+                while not sem.acquire(timeout=0.5):
+                    if self.cancelled:
+                        raise RuntimeError("Cancelled")
+                    if time.time() - wait_started > queue_timeout:
+                        raise RuntimeError("Network queue timeout waiting for worker slot")
+                sem_acquired = True
+
+            # Start hard-timeout countdown only after entering network work section.
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+
             scan_targets = self._host_candidates(computer, ip)
+            if not ip:
+                scan_targets = [computer]
             members = None
             method = None
             details = []
@@ -1959,20 +2074,10 @@ $res | ConvertTo-Json -Compress
             }
 
             for idx, candidate in enumerate(scan_targets):
-<<<<<<< codex/fix-undefined-variable-error-for-targets-cwomf1
-                ports = self._probe_ports(candidate)
-=======
-                p5985 = self.port_open(candidate, 5985, 2.0)
-                p5986 = self.port_open(candidate, 5986, 2.0) if not p5985 else False
-                p445 = self.port_open(candidate, 445, 1.5)
-                p3389 = self.port_open(candidate, 3389, 1.5)
-                ports = {
-                    "5985_winrm": p5985,
-                    "5986_winrm_ssl": p5986,
-                    "445_smb": p445,
-                    "3389_rdp": p3389,
-                }
->>>>>>> main
+                if time.time() >= deadline:
+                    details.append("Host hard timeout reached before candidate scan")
+                    break
+                ports = self._probe_ports_fast(candidate)
                 for key, value in ports.items():
                     aggregate_ports[key] = aggregate_ports[key] or value
 
@@ -1993,6 +2098,18 @@ $res | ConvertTo-Json -Compress
 
                 if try_details:
                     details.extend([candidate + ": " + d for d in try_details])
+                    fatal_markers = (
+                        "netuseadd", "неверно указан тип сетевого ресурса",
+                        "часы данного сервера не синхронизованы",
+                        "access denied", "доступ запрещен",
+                        "error 66", " 66", "2457", "clock skew",
+                    )
+                    joined = " | ".join(str(x).lower() for x in try_details)
+                    if any(marker in joined for marker in fatal_markers):
+                        break
+
+            if members is None and time.time() >= deadline and not details:
+                details.append("Host hard timeout reached")
 
             result["ports"] = aggregate_ports
 
@@ -2053,6 +2170,12 @@ $res | ConvertTo-Json -Compress
                 result["error"] = str(e)
                 self._inc_errors()
                 logger.warning("FAIL %s: %s", computer, e)
+        finally:
+            if 'sem_acquired' in locals() and sem_acquired and getattr(self, "net_semaphore", None) is not None:
+                try:
+                    self.net_semaphore.release()
+                except Exception:
+                    pass
 
         result["scan_time_sec"] = round(time.time() - t0, 2)
         self.result_queue.put({"type": "machine", "data": result})
@@ -2132,57 +2255,104 @@ $res | ConvertTo-Json -Compress
 
             # Adaptive threads
             max_cfg = int(config.get("max_threads", 30))
+            cpu_hint = max(4, (os.cpu_count() or 4) * 8)
+            hard_cap = min(64, cpu_hint)
             if self.total < max_cfg:
                 max_w = max(1, self.total)
             else:
-                max_w = min(max_cfg, 100)
+                max_w = min(max_cfg, hard_cap)
 
             self.executor = ThreadPoolExecutor(max_workers=max_w)
+            net_limit_cfg = int(config.get("network_limit", 0) or 0)
+            if net_limit_cfg > 0:
+                net_limit = max(1, min(net_limit_cfg, max_w))
+                self.net_semaphore = threading.BoundedSemaphore(net_limit)
+                logger.info("Network concurrency limit: %d", net_limit)
+            else:
+                net_limit = 0
+                self.net_semaphore = None
+            rpc_limit_cfg = int(config.get("rpc_parallel_limit", 0) or 0)
+            if bool(config.get("use_rpc_fallback", False)):
+                if rpc_limit_cfg <= 0:
+                    rpc_limit = max(1, min(8, max_w // 4 or 1))
+                else:
+                    rpc_limit = max(1, min(rpc_limit_cfg, max_w))
+                self.rpc_semaphore = threading.BoundedSemaphore(rpc_limit)
+                logger.info("RPC concurrency limit: %d", rpc_limit)
+            else:
+                self.rpc_semaphore = None
+
+            probe_workers = min(64, max(8, max_w * 2))
+            self.probe_executor = ThreadPoolExecutor(max_workers=probe_workers)
+            logger.info("Thread pool size: %d (requested=%d, cap=%d)", max_w, max_cfg, hard_cap)
+            logger.info("Network concurrency limit: %s", "disabled" if net_limit == 0 else str(net_limit))
+            logger.info("Port probe pool size: %d", probe_workers)
             futs = {}
             for c in unique:
                 futs[self.executor.submit(self.scan_machine, c)] = c["hostname"]
 
-            for fut in as_completed(futs):
-                if self.cancelled:
-                    break
-                try:
-                    res = fut.result()
-                    all_results.append(res)
+            per_host_guard = self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900) + 10
+            pending = set(futs.keys())
+            started_at = {fut: time.time() for fut in pending}
+            warned_overdue = set()
 
-                    ports_str = json.dumps(res.get("ports", {}))
-                    risk = res.get("risk") or {}
-                    risk_score = risk.get("score", "")
-                    severity = risk.get("severity", "")
+            while pending and not self.cancelled:
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
 
-                    if res.get("error"):
-                        cw.writerow([
-                            res["computer"], res.get("os", ""),
-                            res.get("ip", ""), "", "", "", "",
-                            res.get("scan_time_sec", 0), "", "",
-                            ports_str, res["error"],
-                        ])
-                    else:
-                        if not res["members"]:
+                for fut in done:
+                    try:
+                        res = fut.result()
+                        all_results.append(res)
+
+                        ports_str = json.dumps(res.get("ports", {}))
+                        risk = res.get("risk") or {}
+                        risk_score = risk.get("score", "")
+                        severity = risk.get("severity", "")
+
+                        if res.get("error"):
                             cw.writerow([
                                 res["computer"], res.get("os", ""),
-                                res.get("ip", ""), "<EMPTY>", "", "",
-                                res.get("method", ""),
-                                res.get("scan_time_sec", 0),
-                                risk_score, severity, ports_str, "",
+                                res.get("ip", ""), "", "", "", "",
+                                res.get("scan_time_sec", 0), "", "",
+                                ports_str, res["error"],
                             ])
-                        for m in res["members"]:
-                            cw.writerow([
-                                res["computer"], res.get("os", ""),
-                                res.get("ip", ""), m["name"], m.get("type", ""),
-                                "YES" if m.get("is_builtin") else "NO",
-                                res.get("method", ""),
-                                res.get("scan_time_sec", 0),
-                                risk_score, severity, ports_str, "",
-                            ])
-                except Exception as exc:
-                    logger.error("Future: %s: %s", futs[fut], exc)
-                finally:
-                    self._inc_progress()
+                        else:
+                            if not res["members"]:
+                                cw.writerow([
+                                    res["computer"], res.get("os", ""),
+                                    res.get("ip", ""), "<EMPTY>", "", "",
+                                    res.get("method", ""),
+                                    res.get("scan_time_sec", 0),
+                                    risk_score, severity, ports_str, "",
+                                ])
+                            for m in res["members"]:
+                                cw.writerow([
+                                    res["computer"], res.get("os", ""),
+                                    res.get("ip", ""), m["name"], m.get("type", ""),
+                                    "YES" if m.get("is_builtin") else "NO",
+                                    res.get("method", ""),
+                                    res.get("scan_time_sec", 0),
+                                    risk_score, severity, ports_str, "",
+                                ])
+                    except Exception as exc:
+                        logger.error("Future: %s: %s", futs[fut], exc)
+                    finally:
+                        self._inc_progress()
+
+                now = time.time()
+                for fut in pending:
+                    if now - started_at.get(fut, now) > per_host_guard and fut not in warned_overdue:
+                        warned_overdue.add(fut)
+                        host = futs.get(fut, "(unknown)")
+                        logger.warning(
+                            "Host is running longer than guard limit but still waiting for real result: %s",
+                            host,
+                        )
+
+            if self.cancelled and pending:
+                logger.info("Cancellation requested: persisting partial results (%d pending hosts will be cancelled)", len(pending))
+                for fut in pending:
+                    fut.cancel()
 
             metrics.finish(self.total)
 
@@ -2196,6 +2366,7 @@ $res | ConvertTo-Json -Compress
                     "scanned": self.progress,
                     "total_members_found": self.found_members,
                     "total_errors": self.error_count,
+                    "cancelled": bool(self.cancelled),
                     "results": all_results,
                 }, jf, ensure_ascii=False, indent=2)
 
@@ -2214,6 +2385,11 @@ $res | ConvertTo-Json -Compress
                     pass
             if self.executor:
                 self.executor.shutdown(wait=False, cancel_futures=True)
+            if getattr(self, "probe_executor", None):
+                self.probe_executor.shutdown(wait=False, cancel_futures=True)
+                self.probe_executor = None
+            self.net_semaphore = None
+            self.rpc_semaphore = None
             if self.ldap_conn:
                 try:
                     self.ldap_conn.unbind()
@@ -2237,6 +2413,7 @@ $res | ConvertTo-Json -Compress
                 "json": os.path.basename(json_path),
                 "csv": os.path.basename(csv_path),
                 "summary": os.path.basename(summary_path),
+                "stopped": bool(self.cancelled),
             })
 
     def _build_summary(self, all_results):
@@ -2433,6 +2610,16 @@ $res | ConvertTo-Json -Compress
         }
     def stop(self):
         self.cancelled = True
+        if self.executor:
+            try:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+        if getattr(self, "probe_executor", None):
+            try:
+                self.probe_executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         logger.info("Cancel requested")
 
 
@@ -2877,6 +3064,41 @@ async def start_scan(request: Request):
     srv_cfg = cfg.get("server_ad_config") or {}
     work_ou = str(cfg.get("workstations_ou") or "").strip()
     srv_ou = str(cfg.get("servers_ou") or "").strip()
+
+    # Credentials fallback to reduce operator friction:
+    # - If server creds are omitted, reuse workstation creds.
+    # - If workstation password is omitted but server password is present, reuse it.
+    if not str(srv_cfg.get("username") or "").strip() and str(ad_cfg.get("username") or "").strip():
+        srv_cfg["username"] = ad_cfg.get("username")
+    if not str(srv_cfg.get("password") or "").strip() and str(ad_cfg.get("password") or "").strip():
+        srv_cfg["password"] = ad_cfg.get("password")
+    if not str(ad_cfg.get("password") or "").strip() and str(srv_cfg.get("password") or "").strip():
+        ad_cfg["password"] = srv_cfg.get("password")
+    cfg["ad_config"] = ad_cfg
+    cfg["server_ad_config"] = srv_cfg
+
+    # Sanitize runtime tuning values to avoid unusable tiny timeouts from UI input.
+    try:
+        cfg["host_timeout"] = max(2, min(300, int(cfg.get("host_timeout", 20))))
+    except (TypeError, ValueError):
+        cfg["host_timeout"] = 20
+    try:
+        cfg["host_hard_timeout_sec"] = max(10, min(900, int(cfg.get("host_hard_timeout_sec", 45))))
+    except (TypeError, ValueError):
+        cfg["host_hard_timeout_sec"] = 45
+    try:
+        cfg["port_probe_timeout_winrm"] = max(0.3, min(5.0, float(cfg.get("port_probe_timeout_winrm", 1.0))))
+    except (TypeError, ValueError):
+        cfg["port_probe_timeout_winrm"] = 1.0
+    try:
+        cfg["port_probe_timeout_fast"] = max(0.1, min(3.0, float(cfg.get("port_probe_timeout_fast", 0.6))))
+    except (TypeError, ValueError):
+        cfg["port_probe_timeout_fast"] = 0.6
+    try:
+        cfg["rpc_parallel_limit"] = max(0, min(64, int(cfg.get("rpc_parallel_limit", 0))))
+    except (TypeError, ValueError):
+        cfg["rpc_parallel_limit"] = 0
+    cfg["use_rpc_adaptive"] = bool(cfg.get("use_rpc_adaptive", True))
 
     if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
         return JSONResponse({"error": "Missing AD server/username"}, status_code=400)
