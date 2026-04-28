@@ -478,8 +478,22 @@ class Scanner:
         members = None
         method = None
         details = []
+        os_name = str((comp_info or {}).get("os") or "").lower()
+        is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
+        prefer_rpc = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
 
-        if ports.get('5985_winrm'):
+        if prefer_rpc and ports.get('445_smb') and bool(self.config.get('use_rpc_fallback', True)):
+            mt0 = time.time()
+            m, r = self._try_rpc_samr(target_host, comp_info=comp_info)
+            if m:
+                method = m + "-legacy-priority"
+                members = r
+                metrics.add_method_timing(method, time.time() - mt0)
+                return method, members, details
+            details.append("Legacy RPC-SAMR: " + str(r)[:200])
+
+        allow_winrm = not is_legacy or bool(self.config.get("legacy_allow_winrm", False))
+        if allow_winrm and ports.get('5985_winrm'):
             for attempt in range(2):
                 mt0 = time.time()
                 m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)
@@ -494,7 +508,7 @@ class Scanner:
                 details.append('WinRM: ' + str(r)[:200])
                 break
 
-        if members is None and ports.get('5986_winrm_ssl'):
+        if members is None and allow_winrm and ports.get('5986_winrm_ssl'):
             mt0 = time.time()
             m, r = self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=True)
             if m:
@@ -936,6 +950,10 @@ class Scanner:
         target = scheme + "://" + computer + ":" + str(port)
 
         host_timeout = int(self.config.get("host_timeout", 40))
+        os_name = str((comp_info or {}).get("os") or "").lower()
+        is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
+        if is_legacy:
+            host_timeout = int(self.config.get("legacy_host_timeout", 20))
 
         return winrm.Session(
             target=target, auth=(username, cfg["password"]),
