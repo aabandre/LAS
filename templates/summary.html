@@ -7,7 +7,7 @@
     <style>
         *{box-sizing:border-box}
         body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:15px;background:#f0f2f5;color:#333}
-        .container{max-width:1500px;margin:0 auto}
+        .container{max-width:1900px;width:98vw;margin:0 auto}
         h1{color:#1a1a2e;font-size:22px;margin:0 0 5px}
         .subtitle{color:#888;font-size:13px;margin-bottom:12px}
         a.back{color:#4a90d9;text-decoration:none;font-size:14px}
@@ -33,6 +33,13 @@
         .card-inner{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:10px;text-align:center}
         .card-val{font-size:22px;font-weight:bold}
         .card-label{font-size:9px;color:#888;text-transform:uppercase;margin-top:2px}
+        .insights{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+        .insight{background:#fff;border:1px solid #dfe6f3;border-radius:6px;padding:8px 10px;min-width:220px;flex:1}
+        .insight-title{font-size:11px;color:#6f7d95;margin-bottom:4px;text-transform:uppercase}
+        .insight-val{font-size:20px;font-weight:700;color:#2d5f9f}
+        .insight-sub{font-size:11px;color:#7f8b9f}
+        .progress-mini{margin-top:6px;height:6px;background:#edf2fb;border-radius:999px;overflow:hidden}
+        .progress-mini > span{display:block;height:100%;background:#4a90d9}
         .c-blue{color:#4a90d9}.c-green{color:#5cb85c}.c-red{color:#d9534f}.c-orange{color:#f0ad4e}.c-purple{color:#9b59b6}.c-teal{color:#1abc9c}.c-gray{color:#95a5a6}.c-dark{color:#34495e}.c-pink{color:#e74c3c}
         .charts{overflow:hidden;margin-bottom:12px}
         .chart-box{float:left;width:20%;padding:3px}
@@ -53,6 +60,8 @@
         th:hover{background:#3a7bc8}
         td{padding:4px 6px;border-bottom:1px solid #eee}
         tr:hover td{background:#f5f8fc}
+        #adminTable thead th{position:sticky;top:0;z-index:2}
+        #adminTable tbody tr:nth-child(even) td{background:#fcfdff}
         .tag{display:inline-block;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:bold}
         .tag-risk{background:#fde8e8;color:#d9534f}
         .tag-builtin{background:#e3f2fd;color:#1976d2}
@@ -62,8 +71,18 @@
         .tag-high{background:#e74c3c;color:#fff}
         .tag-medium{background:#f39c12;color:#fff}
         .tag-low{background:#f1c40f;color:#333}
-        .machines-cell{font-size:9px;color:#666;max-width:300px;max-height:50px;overflow-y:auto;word-break:break-all}
-        .via-cell{font-size:9px;color:#9b59b6;max-width:150px;word-break:break-all}
+        .machines-cell{font-size:9px;color:#666;max-width:420px;max-height:46px;overflow-y:auto;word-break:break-word;line-height:1.3}
+        .via-cell{font-size:9px;color:#9b59b6;max-width:280px;word-break:break-word;line-height:1.3}
+        .admin-table-wrap{max-height:560px;overflow:auto;border:1px solid #edf1f8}
+        .admin-pager{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:8px;font-size:12px;flex-wrap:wrap}
+        .admin-pager .pager-right{display:flex;align-items:center;gap:8px}
+        .admin-pager button{padding:3px 9px;font-size:12px;border:1px solid #4a90d9;background:#fff;color:#4a90d9;border-radius:3px;cursor:pointer}
+        .admin-pager button[disabled]{opacity:.4;cursor:default}
+        .admin-pager select{padding:3px 6px;border:1px solid #ccc;border-radius:3px}
+        .cell-details{font-size:10px}
+        .cell-details summary{cursor:pointer;color:#2d5f9f;font-weight:600;outline:none}
+        .cell-details[open] summary{margin-bottom:4px}
+        .cell-details .full-list{max-height:70px;overflow:auto;line-height:1.25;color:#666;word-break:break-word}
         .machine-filter{margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
         .machine-filter select,.machine-filter input{padding:4px 8px;font-size:12px;border:1px solid #ccc;border-radius:3px}
         .machine-detail{margin-top:10px;border:1px solid #e1e7f0;border-radius:4px;background:#fafcff;padding:10px}
@@ -120,6 +139,7 @@
 
     <div id="content" style="display:none">
         <div class="cards" id="summaryCards"></div>
+        <div class="insights" id="summaryInsights"></div>
         <div class="tabs" id="tabBar"></div>
 
         <div class="tab-content active" id="tabCharts">
@@ -149,17 +169,33 @@
                     <label><input type="checkbox" id="hideGroupHeaders" onchange="filterAdmins()"> <span data-i18n="adm_hide_groups">Hide groups</span></label>
                     <label><input type="checkbox" id="showOnlyLocalFromGroups" onchange="filterAdmins()"> <span data-i18n="adm_only_local_groups">Only local from groups</span></label>
                 </div>
-                <table id="adminTable">
-                    <thead><tr>
-                        <th onclick="sortTbl('adminTable',0)">#</th>
-                        <th onclick="sortTbl('adminTable',1)" data-i18n="col_account">Account</th>
-                        <th onclick="sortTbl('adminTable',2)" data-i18n="col_type">Type</th>
-                        <th onclick="sortTbl('adminTable',3)" data-i18n="col_count">Count</th>
-                        <th onclick="sortTbl('adminTable',4)" data-i18n="col_via">Via Group</th>
-                        <th data-i18n="col_machines">Machines</th>
-                    </tr></thead>
-                    <tbody id="adminBody"></tbody>
-                </table>
+                <div class="admin-table-wrap">
+                    <table id="adminTable">
+                        <thead><tr>
+                            <th onclick="sortTbl('adminTable',0)">#</th>
+                            <th onclick="sortTbl('adminTable',1)" data-i18n="col_account">Account</th>
+                            <th onclick="sortTbl('adminTable',2)" data-i18n="col_type">Type</th>
+                            <th onclick="sortTbl('adminTable',3)" data-i18n="col_count">Count</th>
+                            <th onclick="sortTbl('adminTable',4)" data-i18n="col_via">Via Group</th>
+                            <th data-i18n="col_machines">Machines</th>
+                        </tr></thead>
+                        <tbody id="adminBody"></tbody>
+                    </table>
+                </div>
+                <div class="admin-pager" id="adminPager">
+                    <div id="adminPagerText">1-0 / 0</div>
+                    <div class="pager-right">
+                        <label for="adminPageSize" data-i18n="pager_rows">Rows:</label>
+                        <select id="adminPageSize" onchange="changeAdminPageSize()">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                        </select>
+                        <button onclick="changeAdminPage(-1)" id="adminPrevBtn" data-i18n="pager_prev">Prev</button>
+                        <button onclick="changeAdminPage(1)" id="adminNextBtn" data-i18n="pager_next">Next</button>
+                    </div>
+                </div>
                 <div class="machine-detail" id="machineDetailBox"></div>
             </div>
         </div>
@@ -220,6 +256,7 @@ en:{
     adm_title:"All Admin Accounts",adm_showing:"Showing",adm_of:"of",adm_search:"Search accounts...",
     adm_hide_admin:"Hide Administrator",adm_hide_builtin:"Hide ALL built-in",adm_only_custom:"Only custom",
     adm_only_via:"Only via group",adm_hide_groups:"Hide groups",adm_only_local_groups:"Only local from groups",
+    pager_rows:"Rows:",pager_prev:"Prev",pager_next:"Next",
     machine_filter:"Machine:",machine_all:"All machines",machine_quick_search:"Find machine...",machine_detail_empty:"Select a machine to view detailed memberships",
     machine_detail_error:"Machine scan error",machine_detail_groups:"Local groups and resolved memberships",
     col_account:"Account",col_type:"Type",col_count:"Count",col_via:"Via Group",col_machines:"Machines",
@@ -250,6 +287,7 @@ ru:{
     adm_only_custom:"\u0422\u043e\u043b\u044c\u043a\u043e \u043d\u0435\u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u044b\u0435",
     adm_only_via:"\u0422\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043f\u043f\u0443",
     adm_hide_groups:"\u0421\u043a\u0440\u044b\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u044b",adm_only_local_groups:"\u0422\u043e\u043b\u044c\u043a\u043e \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u0438\u0437 \u0433\u0440\u0443\u043f\u043f",
+    pager_rows:"\u0421\u0442\u0440\u043e\u043a:",pager_prev:"\u041d\u0430\u0437\u0430\u0434",pager_next:"\u0412\u043f\u0435\u0440\u0451\u0434",
     machine_filter:"\u041c\u0430\u0448\u0438\u043d\u0430:",machine_all:"\u0412\u0441\u0435 \u043c\u0430\u0448\u0438\u043d\u044b",machine_quick_search:"\u041d\u0430\u0439\u0442\u0438 \u043c\u0430\u0448\u0438\u043d\u0443...",machine_detail_empty:"\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043c\u0430\u0448\u0438\u043d\u0443 \u0434\u043b\u044f \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u043e\u0433\u043e \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430",
     machine_detail_error:"\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043a\u0430\u043d\u0430 \u043c\u0430\u0448\u0438\u043d\u044b",machine_detail_groups:"\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0438 \u0438\u0445 \u0441\u043e\u0441\u0442\u0430\u0432",
     col_account:"\u0423\u0447\u0451\u0442\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c",
@@ -295,10 +333,41 @@ window.addEventListener("load",function(){applyLang();updateLangBtns()});
 /* ═══════════════════════════════════════ */
 var SD=null,COLORS=["#4a90d9","#5cb85c","#d9534f","#f0ad4e","#9b59b6","#1abc9c","#e74c3c","#3498db","#2ecc71","#e67e22","#95a5a6","#34495e","#16a085","#c0392b","#8e44ad","#2c3e50"];
 var sortDirs={};
+var adminCurrentPage=1;
 function $(id){return document.getElementById(id)}
 function val(id){return $(id)?$(id).value:""}
 function getJSON(u,cb){var x=new XMLHttpRequest();x.open("GET",u,true);x.onreadystatechange=function(){if(x.readyState===4){var r=null;try{r=JSON.parse(x.responseText)}catch(e){}cb(x.status,r)}};x.send()}
 function formatSize(b){if(b>1048576)return(b/1048576).toFixed(1)+"MB";if(b>1024)return(b/1024).toFixed(1)+"KB";return b+"B"}
+function formatDuration(sec){
+    var n=Math.round(parseFloat(sec)||0),h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=n%60;
+    if(h>0)return h+"h "+m+"m "+s+"s";
+    if(m>0)return m+"m "+s+"s";
+    return s+"s";
+}
+function escapeHtml(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;")}
+function splitList(txt){
+    if(!txt)return [];
+    var raw=String(txt).split(","),out=[];
+    for(var i=0;i<raw.length;i++){var v=raw[i].trim();if(v)out.push(v)}
+    return out;
+}
+function renderExpandableList(items,labelOne,labelMany){
+    var count=items.length;
+    if(count===0)return "<span style=\"color:#9aa5b5\">-</span>";
+    if(count<=2)return "<span>"+escapeHtml(items.join(", "))+"</span>";
+    var shortList=escapeHtml(items.slice(0,2).join(", "));
+    var fullList=escapeHtml(items.join(", "));
+    var lbl=count===1?labelOne:labelMany;
+    return "<details class=\"cell-details\"><summary>"+count+" "+lbl+" · "+shortList+"…</summary><div class=\"full-list\">"+fullList+"</div></details>";
+}
+function renderExpandableText(text,label){
+    var clean=String(text||"").trim();
+    if(!clean)return "<span style=\"color:#9aa5b5\">-</span>";
+    if(clean.length<70)return "<span>"+escapeHtml(clean)+"</span>";
+    var shortText=escapeHtml(clean.slice(0,70));
+    return "<details class=\"cell-details\"><summary>"+label+" · "+shortText+"…</summary><div class=\"full-list\">"+escapeHtml(clean)+"</div></details>";
+}
+function pct(v,total){if(!total)return 0;return Math.round((v/total)*1000)/10}
 function isLA(s){return s==="administrator"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440"}
 function isBuiltinName(s){return isLA(s)||s==="administrators"||s==="\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b"||s==="guests"||s==="\u0433\u043e\u0441\u0442\u0438"}
 function isGroupType(tp){var t=(tp||"").toLowerCase();return t.indexOf("group")>-1||t.indexOf("nested")>-1||t.indexOf("\u0433\u0440\u0443\u043f\u043f")>-1}
@@ -327,7 +396,8 @@ function saveAdminFilters(){
             showOnlyViaGroup: $("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,
             hideGroupHeaders: $("hideGroupHeaders")?$("hideGroupHeaders").checked:false,
             showOnlyLocalFromGroups: $("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false,
-            machineFilter: val("machineFilter")
+            machineFilter: val("machineFilter"),
+            adminPageSize: val("adminPageSize")||"50"
         };
         localStorage.setItem("summaryAdminFilters", JSON.stringify(payload));
     }catch(e){}
@@ -345,6 +415,7 @@ function loadAdminFilters(){
         if(data.hasOwnProperty("hideGroupHeaders")&&$("hideGroupHeaders")) $("hideGroupHeaders").checked=!!data.hideGroupHeaders;
         if(data.hasOwnProperty("showOnlyLocalFromGroups")&&$("showOnlyLocalFromGroups")) $("showOnlyLocalFromGroups").checked=!!data.showOnlyLocalFromGroups;
         if(data.hasOwnProperty("machineFilter")&&$("machineFilter")) $("machineFilter").value=data.machineFilter||"";
+        if(data.hasOwnProperty("adminPageSize")&&$("adminPageSize")) $("adminPageSize").value=data.adminPageSize||"50";
     }catch(e){}
 }
 getJSON("/api/scans",function(s,data){
@@ -380,10 +451,19 @@ function renderAll(){if(!SD)return;buildTabs();applyLang();renderCards();
 function renderCards(){var d=SD,sb=d.severity_breakdown||{};
     var items=[{v:d.total_scanned||0,l:"card_total",c:"c-blue"},{v:d.success||0,l:"card_success",c:"c-green"},{v:d.errors||0,l:"card_errors",c:"c-red"},
         {v:d.unique_admin_accounts||0,l:"card_accounts",c:"c-purple"},{v:d.risky_machines_count||0,l:"card_risky",c:"c-orange"},
-        {v:d.clean_machines_count||0,l:"card_clean",c:"c-teal"},{v:(d.avg_scan_time_sec||0)+"s",l:"card_avg",c:"c-gray"},
-        {v:(d.max_scan_time_sec||0)+"s",l:"card_max",c:"c-dark"},{v:sb.critical||0,l:"card_critical",c:"c-pink"}];
+        {v:d.clean_machines_count||0,l:"card_clean",c:"c-teal"},{v:formatDuration(d.avg_scan_time_sec||0),l:"card_avg",c:"c-gray"},
+        {v:formatDuration(d.max_scan_time_sec||0),l:"card_max",c:"c-dark"},{v:sb.critical||0,l:"card_critical",c:"c-pink"}];
     var h="";for(var i=0;i<items.length;i++){h+="<div class=\"card-sm\"><div class=\"card-inner\"><div class=\"card-val "+items[i].c+"\">"+items[i].v+"</div><div class=\"card-label\">"+t(items[i].l)+"</div></div></div>"}
-    $("summaryCards").innerHTML=h}
+    $("summaryCards").innerHTML=h;
+
+    var total=d.total_scanned||0,success=d.success||0,errors=d.errors||0,risky=d.risky_machines_count||0;
+    var errPct=pct(errors,total),riskPct=pct(risky,total),okPct=pct(success,total);
+    var insightHtml=
+        "<div class=\"insight\"><div class=\"insight-title\">Success rate</div><div class=\"insight-val\">"+okPct+"%</div><div class=\"insight-sub\">"+success+" / "+total+" hosts</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,okPct)+"%;background:#5cb85c\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">Error rate</div><div class=\"insight-val\">"+errPct+"%</div><div class=\"insight-sub\">"+errors+" hosts with errors</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,errPct)+"%;background:#d9534f\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">Risk coverage</div><div class=\"insight-val\">"+riskPct+"%</div><div class=\"insight-sub\">"+risky+" risky / "+(d.clean_machines_count||0)+" clean</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,riskPct)+"%;background:#f0ad4e\"></span></div></div>";
+    $("summaryInsights").innerHTML=insightHtml;
+}
 
 function drawPie(cid,lid,obj,colors){var cv=$(cid);if(!cv||!cv.getContext)return;var ctx=cv.getContext("2d"),w=cv.width,h=cv.height,cx=w/2,cy=h/2,r=Math.min(w,h)/2-6;ctx.clearRect(0,0,w,h);
     var keys=[],vals=[],total=0,k;for(k in obj){if(obj.hasOwnProperty(k)){keys.push(k);vals.push(obj[k]);total+=obj[k]}}
@@ -397,20 +477,33 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         var isBI=a.is_builtin===true||isBuiltinName(short),isLAd=a.hasOwnProperty("is_local_admin")?a.is_local_admin===true:isLA(short);
         var via=a.via_group||"",hasVia=via.length>0,aType=a.type||"",isGrp=isGroupType(aType);
         var tagT,tagC;if(isLAd){tagT="local-admin";tagC="tag-local-admin"}else if(isGrp){tagT="group";tagC="tag-nested"}else if(isBI){tagT="builtin";tagC="tag-builtin"}else{tagT="custom";tagC="tag-risk"}
-        var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",mList=(a.machines||[]).join(", ");
+        var accountSafe=escapeHtml(a.account||"");
+        var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",machineArr=(a.machines||[]),mList=machineArr.join(", ");
+        var viaView=renderExpandableText(via,"groups"),machinesView=renderExpandableList(machineArr,"host","hosts");
         html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
-            +"<td>"+(i+1)+"</td><td>"+a.account+" "+tag+"</td><td>"+tag+"</td>"
+            +"<td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
-            +"<td class=\"via-cell\">"+via+"</td><td><div class=\"machines-cell\">"+mList+"</div></td></tr>"}
-    $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;filterAdmins()}
+            +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td></tr>"}
+    $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;adminCurrentPage=1;filterAdmins()}
 
 function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false,oLG=$("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false;
-    var rows=$("adminBody").getElementsByTagName("tr"),vis=0;
+    var rows=$("adminBody").getElementsByTagName("tr"),vis=0,matched=[];
     for(var i=0;i<rows.length;i++){var row=rows[i],sd=row.getAttribute("data-search")||"",ila=row.getAttribute("data-is-la")==="1",ibi=row.getAttribute("data-is-bi")==="1",icu=row.getAttribute("data-is-custom")==="1",hv=row.getAttribute("data-has-via")==="1",ig=row.getAttribute("data-is-group")==="1",idm=row.getAttribute("data-is-domain")==="1";
         var mds=row.getAttribute("data-machines")||"";
         var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&mf&&mds.indexOf(mf)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;if(show&&oLG&&hv&&idm)show=false;
-        row.style.display=show?"":"none";if(show)vis++}$("adminShowing").innerHTML=vis;saveAdminFilters()
+        row.style.display=show?"":"none";if(show){vis++;matched.push(row)}}
+    var pageSize=parseInt(val("adminPageSize")||"50",10);if(!pageSize||pageSize<1)pageSize=50;
+    var totalPages=Math.max(1,Math.ceil(matched.length/pageSize));
+    if(adminCurrentPage>totalPages)adminCurrentPage=totalPages;
+    var start=(adminCurrentPage-1)*pageSize,end=start+pageSize;
+    for(i=0;i<matched.length;i++)matched[i].style.display=(i>=start&&i<end)?"":"none";
+    var txt=$( "adminPagerText");if(txt)txt.innerHTML=(matched.length?start+1:0)+"-"+Math.min(end,matched.length)+" / "+matched.length;
+    if($("adminPrevBtn"))$("adminPrevBtn").disabled=adminCurrentPage<=1;
+    if($("adminNextBtn"))$("adminNextBtn").disabled=adminCurrentPage>=totalPages;
+    $("adminShowing").innerHTML=matched.length;saveAdminFilters()
 }
+function changeAdminPage(delta){adminCurrentPage=Math.max(1,adminCurrentPage+delta);filterAdmins()}
+function changeAdminPageSize(){adminCurrentPage=1;filterAdmins()}
 
 function renderMachineFilter(){
     var sel=$("machineFilter");if(!sel)return;
@@ -441,7 +534,7 @@ function renderMachineDetails(){
     var mm=SD.machine_memberships||{},md=mm[machine];
     if(!md){box.innerHTML='<div style="color:#777">'+t("no_data")+'</div>';return}
     var h='<h4>'+machine+'</h4>';
-    h+='<div><b>OS:</b> '+(md.os||'-')+' | <b>Method:</b> '+(md.method||'-')+' | <b>Time:</b> '+(md.scan_time_sec||0)+'s</div>';
+    h+='<div><b>OS:</b> '+(md.os||'-')+' | <b>Method:</b> '+(md.method||'-')+' | <b>Time:</b> '+formatDuration(md.scan_time_sec||0)+'</div>';
     if(md.error){h+='<div style="margin-top:6px;color:#c0392b"><b>'+t("machine_detail_error")+':</b> '+md.error+'</div>';box.innerHTML=h;return}
     h+='<div style="margin-top:6px"><b>'+t("machine_detail_groups")+':</b></div>';
     var groups=md.groups||{},gk=[],k;
@@ -494,7 +587,7 @@ function runDiff(){var s1v=val("selDiff1"),s2v=val("selDiff2");if(!s1v||!s2v){al
 function filterGrid(gid,iid){var f=val(iid).toLowerCase(),items=$(gid).getElementsByClassName("risky-item");for(var i=0;i<items.length;i++){var s=items[i].getAttribute("data-search")||"";items[i].style.display=(s.indexOf(f)>-1)?"":"none"}}
 function sortTbl(tid,col){var table=$(tid),tbody=table.getElementsByTagName("tbody")[0],rows=tbody.getElementsByTagName("tr"),arr=[];for(var i=0;i<rows.length;i++)arr.push(rows[i]);var key=tid+"_"+col,asc=!sortDirs[key];sortDirs[key]=asc;
     arr.sort(function(a,b){var tdA=a.getElementsByTagName("td")[col],tdB=b.getElementsByTagName("td")[col];var ca=tdA?(tdA.innerText||tdA.textContent||""):"",cb=tdB?(tdB.innerText||tdB.textContent||""):"";var na=parseFloat(ca),nb=parseFloat(cb);if(!isNaN(na)&&!isNaN(nb))return asc?na-nb:nb-na;ca=ca.toLowerCase();cb=cb.toLowerCase();return asc?(ca<cb?-1:ca>cb?1:0):(ca>cb?-1:ca<cb?1:0)});
-    for(i=0;i<arr.length;i++)tbody.appendChild(arr[i])}
+    for(i=0;i<arr.length;i++)tbody.appendChild(arr[i]);adminCurrentPage=1;filterAdmins()}
 </script>
 </body>
 </html>
