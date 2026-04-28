@@ -433,24 +433,21 @@ class Scanner:
 
     def _probe_ports_fast(self, host):
         try:
-            winrm_timeout = float(self.config.get("port_probe_timeout_winrm", 1.5) or 1.5)
+            winrm_timeout = float(self.config.get("port_probe_timeout_winrm", 1.0) or 1.0)
         except (TypeError, ValueError):
             winrm_timeout = 1.5
         try:
-            fast_timeout = float(self.config.get("port_probe_timeout_fast", 1.0) or 1.0)
+            fast_timeout = float(self.config.get("port_probe_timeout_fast", 0.6) or 0.6)
         except (TypeError, ValueError):
             fast_timeout = 1.0
         winrm_timeout = max(0.5, min(10.0, winrm_timeout))
         fast_timeout = max(0.2, min(5.0, fast_timeout))
 
-        with ThreadPoolExecutor(max_workers=3) as probe_pool:
-            fut5985 = probe_pool.submit(self.port_open, host, 5985, winrm_timeout)
-            fut445 = probe_pool.submit(self.port_open, host, 445, fast_timeout)
-            fut3389 = probe_pool.submit(self.port_open, host, 3389, fast_timeout)
-            p5985 = fut5985.result()
-            p445 = fut445.result()
-            p3389 = fut3389.result()
-
+        # Intentionally sequential: avoids nested thread-pool explosion when
+        # scanning many hosts in parallel and keeps thread usage predictable.
+        p5985 = self.port_open(host, 5985, winrm_timeout)
+        p445 = self.port_open(host, 445, fast_timeout)
+        p3389 = self.port_open(host, 3389, fast_timeout)
         p5986 = self.port_open(host, 5986, winrm_timeout) if not p5985 else False
         return {
             "5985_winrm": p5985,
@@ -957,11 +954,11 @@ class Scanner:
         scheme = "https" if use_ssl else "http"
         target = scheme + "://" + computer + ":" + str(port)
 
-        host_timeout = int(self.config.get("host_timeout", 40))
+        host_timeout = int(self.config.get("host_timeout", 20))
         os_name = str((comp_info or {}).get("os") or "").lower()
         is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
         if is_legacy:
-            host_timeout = int(self.config.get("legacy_host_timeout", 20))
+            host_timeout = int(self.config.get("legacy_host_timeout", 10))
 
         return winrm.Session(
             target=target, auth=(username, cfg["password"]),
@@ -2003,7 +2000,7 @@ $res | ConvertTo-Json -Compress
 
             ip = dns_cache.resolve(computer)
             result["ip"] = ip
-            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 300, minimum=60, maximum=1800)
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
 
             scan_targets = self._host_candidates(computer, ip)
             members = None
@@ -2184,23 +2181,26 @@ $res | ConvertTo-Json -Compress
 
             # Adaptive threads
             max_cfg = int(config.get("max_threads", 30))
+            cpu_hint = max(4, (os.cpu_count() or 4) * 8)
+            hard_cap = min(64, cpu_hint)
             if self.total < max_cfg:
                 max_w = max(1, self.total)
             else:
-                max_w = min(max_cfg, 100)
+                max_w = min(max_cfg, hard_cap)
 
             self.executor = ThreadPoolExecutor(max_workers=max_w)
+            logger.info("Thread pool size: %d (requested=%d, cap=%d)", max_w, max_cfg, hard_cap)
             futs = {}
             for c in unique:
                 futs[self.executor.submit(self.scan_machine, c)] = c["hostname"]
 
-            per_host_guard = self._cfg_int("host_hard_timeout_sec", 300, minimum=60, maximum=1800) + 60
+            per_host_guard = self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900) + 10
             pending = set(futs.keys())
             started_at = {fut: time.time() for fut in pending}
             warned_overdue = set()
 
             while pending and not self.cancelled:
-                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
 
                 for fut in done:
                     try:
@@ -2252,6 +2252,11 @@ $res | ConvertTo-Json -Compress
                             host,
                         )
 
+            if self.cancelled and pending:
+                logger.info("Cancellation requested: persisting partial results (%d pending hosts will be cancelled)", len(pending))
+                for fut in pending:
+                    fut.cancel()
+
             metrics.finish(self.total)
 
             summary = self._build_summary(all_results)
@@ -2264,6 +2269,7 @@ $res | ConvertTo-Json -Compress
                     "scanned": self.progress,
                     "total_members_found": self.found_members,
                     "total_errors": self.error_count,
+                    "cancelled": bool(self.cancelled),
                     "results": all_results,
                 }, jf, ensure_ascii=False, indent=2)
 
@@ -2305,6 +2311,7 @@ $res | ConvertTo-Json -Compress
                 "json": os.path.basename(json_path),
                 "csv": os.path.basename(csv_path),
                 "summary": os.path.basename(summary_path),
+                "stopped": bool(self.cancelled),
             })
 
     def _build_summary(self, all_results):
@@ -2960,21 +2967,21 @@ async def start_scan(request: Request):
 
     # Sanitize runtime tuning values to avoid unusable tiny timeouts from UI input.
     try:
-        cfg["host_timeout"] = max(5, min(600, int(cfg.get("host_timeout", 40))))
+        cfg["host_timeout"] = max(2, min(300, int(cfg.get("host_timeout", 20))))
     except (TypeError, ValueError):
-        cfg["host_timeout"] = 40
+        cfg["host_timeout"] = 20
     try:
-        cfg["host_hard_timeout_sec"] = max(60, min(3600, int(cfg.get("host_hard_timeout_sec", 300))))
+        cfg["host_hard_timeout_sec"] = max(10, min(900, int(cfg.get("host_hard_timeout_sec", 45))))
     except (TypeError, ValueError):
-        cfg["host_hard_timeout_sec"] = 300
+        cfg["host_hard_timeout_sec"] = 45
     try:
-        cfg["port_probe_timeout_winrm"] = max(0.5, min(10.0, float(cfg.get("port_probe_timeout_winrm", 1.5))))
+        cfg["port_probe_timeout_winrm"] = max(0.3, min(5.0, float(cfg.get("port_probe_timeout_winrm", 1.0))))
     except (TypeError, ValueError):
-        cfg["port_probe_timeout_winrm"] = 1.5
+        cfg["port_probe_timeout_winrm"] = 1.0
     try:
-        cfg["port_probe_timeout_fast"] = max(0.2, min(5.0, float(cfg.get("port_probe_timeout_fast", 1.0))))
+        cfg["port_probe_timeout_fast"] = max(0.1, min(3.0, float(cfg.get("port_probe_timeout_fast", 0.6))))
     except (TypeError, ValueError):
-        cfg["port_probe_timeout_fast"] = 1.0
+        cfg["port_probe_timeout_fast"] = 0.6
 
     if not str(ad_cfg.get("server") or "").strip() or not str(ad_cfg.get("username") or "").strip():
         return JSONResponse({"error": "Missing AD server/username"}, status_code=400)
