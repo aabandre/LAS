@@ -2017,6 +2017,15 @@ $res | ConvertTo-Json -Compress
                 sem.acquire()
                 sem_acquired = True
 
+            sem = getattr(self, "net_semaphore", None)
+            sem_acquired = False
+            if sem is not None:
+                sem.acquire()
+                sem_acquired = True
+
+            # Start hard-timeout countdown only after entering network work section.
+            deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+
             scan_targets = self._host_candidates(computer, ip)
             members = None
             method = None
