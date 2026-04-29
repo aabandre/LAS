@@ -69,6 +69,11 @@
         .ou-row input,.ou-row select{flex:1;padding:5px 7px;border:1px solid #ccc;border-radius:3px;font-size:12px}
         .mini-btn{padding:5px 10px;font-size:11px;border:none;border-radius:3px;background:#4a90d9;color:#fff;cursor:pointer}
         .mini-btn:hover{background:#3a7bc8}
+        .help-txt{font-size:11px;color:#6d7b90;margin:4px 0 6px}
+        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px 18px;padding:10px;background:#f8fbff;border:1px solid #dce8fb;border-radius:5px}
+        .opt-item{display:flex;align-items:flex-start;gap:8px;line-height:1.2}
+        .opt-item input{margin-top:2px}
+        @media (max-width:1200px){.ou-helper,.opt-grid{grid-template-columns:1fr}}
         @media (max-width:980px){.stats{grid-template-columns:repeat(3,minmax(90px,1fr))}}
     </style>
 </head>
@@ -113,6 +118,7 @@
         <div class="ou-helper">
             <div class="ou-box">
                 <h4 data-i18n="ou_work_helper_title">Workstations OU Builder</h4>
+                <div class="help-txt" data-i18n="ou_helper_hint">You can enter full DN, OU name, or slash path (e.g. IT/Workstations).</div>
                 <div class="ou-row">
                     <input type="text" id="cfgOuWorkName" placeholder="Workstations">
                     <button class="mini-btn" onclick="buildOuDn('work')" data-i18n="ou_build_btn">Build DN</button>
@@ -121,6 +127,7 @@
             </div>
             <div class="ou-box">
                 <h4 data-i18n="ou_srv_helper_title">Servers OU Builder</h4>
+                <div class="help-txt" data-i18n="ou_helper_hint">You can enter full DN, OU name, or slash path (e.g. IT/Workstations).</div>
                 <div class="ou-row">
                     <input type="text" id="cfgOuSrvName" placeholder="Servers">
                     <button class="mini-btn" onclick="buildOuDn('srv')" data-i18n="ou_build_btn">Build DN</button>
@@ -163,12 +170,12 @@
         <div class="form-row">
             <label data-i18n="lbl_runtime_opts">Runtime options:</label>
             <div class="opt-grid">
-                <label><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
-                <label><input type="checkbox" id="cfgExpandUnknown"> <span data-i18n="lbl_expand_unknown">Expand unknown/account domain entries (slower)</span></label>
-                <label><input type="checkbox" id="cfgRpcFallback" checked> <span data-i18n="lbl_rpc_fallback">Enable RPC fallback (SMB)</span></label>
-                <label><input type="checkbox" id="cfgAdaptiveRpcOnWinrmError" checked> <span data-i18n="lbl_adaptive_rpc_on_winrm_error">If WinRM fails, still try RPC fallback</span></label>
-                <label><input type="checkbox" id="cfgWmiFallback"> <span data-i18n="lbl_wmi_fallback">Enable WMI fallback (slower)</span></label>
-                <label><input type="checkbox" id="cfgDebugLog"> <span data-i18n="lbl_debug_log">Enable debug log (verbose reasons)</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgExpandUnknown"> <span data-i18n="lbl_expand_unknown">Expand unknown/account domain entries (slower)</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgRpcFallback" checked> <span data-i18n="lbl_rpc_fallback">Enable RPC fallback (SMB)</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgAdaptiveRpcOnWinrmError" checked> <span data-i18n="lbl_adaptive_rpc_on_winrm_error">If WinRM fails, still try RPC fallback</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgWmiFallback"> <span data-i18n="lbl_wmi_fallback">Enable WMI fallback (slower)</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgDebugLog"> <span data-i18n="lbl_debug_log">Enable debug log (verbose reasons)</span></label>
             </div>
         </div>
         <button class="btn btn-start" id="btnStart" onclick="doStart()" data-i18n="btn_start">Start Scan</button>
@@ -232,6 +239,7 @@ var LANG = {
         ou_work_helper_title: "Workstations OU Builder",
         ou_srv_helper_title: "Servers OU Builder",
         ou_build_btn: "Build DN",
+        ou_helper_hint: "You can enter full DN, OU name, or slash path (e.g. IT/Workstations).",
         lbl_timeout: "Host Timeout (sec):",
         lbl_hard_timeout: "Host Hard Timeout (sec):",
         lbl_probe_winrm: "WinRM Probe Timeout (sec):",
@@ -310,6 +318,7 @@ var LANG = {
         ou_work_helper_title: "\u041a\u043e\u043d\u0441\u0442\u0440\u0443\u043a\u0442\u043e\u0440 OU \u0440\u0430\u0431\u043e\u0447\u0438\u0445 \u0441\u0442\u0430\u043d\u0446\u0438\u0439",
         ou_srv_helper_title: "\u041a\u043e\u043d\u0441\u0442\u0440\u0443\u043a\u0442\u043e\u0440 OU \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432",
         ou_build_btn: "\u0421\u043e\u0431\u0440\u0430\u0442\u044c DN",
+        ou_helper_hint: "\u041c\u043e\u0436\u043d\u043e \u0432\u0432\u0435\u0441\u0442\u0438 \u043f\u043e\u043b\u043d\u044b\u0439 DN, \u0438\u043c\u044f OU \u0438\u043b\u0438 \u043f\u0443\u0442\u044c \u0447\u0435\u0440\u0435\u0437 / (\u043d\u0430\u043f\u0440. IT/Workstations).",
         lbl_timeout: "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 \u0445\u043e\u0441\u0442\u0430 (\u0441\u0435\u043a):",
         lbl_hard_timeout: "\u0416\u0451\u0441\u0442\u043a\u0438\u0439 \u0442\u0430\u0439\u043c\u0430\u0443\u0442 \u0445\u043e\u0441\u0442\u0430 (\u0441\u0435\u043a):",
         lbl_probe_winrm: "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 WinRM \u043f\u0440\u043e\u0431\u044b (\u0441\u0435\u043a):",
@@ -487,9 +496,22 @@ function buildDnFromDomain(domain){
 function buildOuDn(kind){
     var domain=val("cfgDomain"), base=buildDnFromDomain(domain);
     if(!base){ alert("Set Domain first"); return; }
-    var ouName=(kind==="work"?val("cfgOuWorkName"):val("cfgOuSrvName")).trim();
-    if(!ouName){ alert("Set OU name"); return; }
-    var dn="OU="+ouName+","+base;
+    var raw=(kind==="work"?val("cfgOuWorkName"):val("cfgOuSrvName")).trim();
+    if(!raw){ alert("Set OU value"); return; }
+    var upper=raw.toUpperCase();
+    var dn="";
+    if(upper.indexOf("DC=")>=0){
+        dn=raw;
+    }else{
+        var parts=raw.split("/"), ous=[];
+        for(var i=0;i<parts.length;i++){
+            var p=parts[i].replace(/^\s+|\s+$/g,"");
+            if(!p) continue;
+            if(/^OU=/i.test(p)){ous.push(p);} else {ous.push("OU="+p);}
+        }
+        if(!ous.length){ alert("Set valid OU"); return; }
+        dn=ous.join(",")+","+base;
+    }
     if(kind==="work") $("cfgOuWork").value=dn; else $("cfgOuSrv").value=dn;
 }
 
