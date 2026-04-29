@@ -8,6 +8,7 @@ import threading
 import logging
 import time
 import glob
+import fnmatch
 import ipaddress
 from datetime import datetime
 from collections import defaultdict
@@ -408,6 +409,45 @@ class Scanner:
         if maximum is not None:
             value = min(maximum, value)
         return value
+
+    @staticmethod
+    def _matches_any_pattern(value, patterns):
+        text = str(value or "").strip().lower()
+        if not text:
+            return False
+        for p in patterns or []:
+            pat = str(p or "").strip().lower()
+            if not pat:
+                continue
+            # allow plain substring and shell-like wildcard patterns.
+            if "*" in pat or "?" in pat:
+                if fnmatch.fnmatch(text, pat):
+                    return True
+            elif pat in text:
+                return True
+        return False
+
+    def _apply_object_filters(self, computers):
+        include_patterns = [str(x).strip() for x in (self.config.get("include_hosts") or []) if str(x).strip()]
+        exclude_patterns = [str(x).strip() for x in (self.config.get("exclude_hosts") or []) if str(x).strip()]
+        os_contains = str(self.config.get("os_contains") or "").strip().lower()
+
+        if not include_patterns and not exclude_patterns and not os_contains:
+            return computers
+
+        filtered = []
+        for c in computers:
+            host = str(c.get("hostname") or "")
+            os_name = str(c.get("os") or "")
+            target = (host + " " + os_name).strip()
+            if include_patterns and not self._matches_any_pattern(target, include_patterns):
+                continue
+            if exclude_patterns and self._matches_any_pattern(target, exclude_patterns):
+                continue
+            if os_contains and os_contains not in os_name.lower():
+                continue
+            filtered.append(c)
+        return filtered
 
     @staticmethod
     def port_open(host, port, timeout=2.0):
@@ -2357,6 +2397,7 @@ $res | ConvertTo-Json -Compress
                 if h not in seen:
                     seen.add(h)
                     unique.append(c)
+            unique = self._apply_object_filters(unique)
             unique.sort(key=lambda x: x["hostname"].lower())
             self.total = len(unique)
             logger.info("Targets: %d", self.total)
@@ -3186,6 +3227,18 @@ async def start_scan(request: Request):
 
     if isinstance(cfg.get("group_targets"), list) and not cfg.get("group_targets"):
         return JSONResponse({"error": "Select at least one local group to scan"}, status_code=400)
+
+    # Optional object-level filters for convenient target selection.
+    for key in ("include_hosts", "exclude_hosts"):
+        raw = cfg.get(key, [])
+        if isinstance(raw, str):
+            items = [x.strip() for x in raw.replace("\r", "").split("\n") if x.strip()]
+        elif isinstance(raw, list):
+            items = [str(x).strip() for x in raw if str(x).strip()]
+        else:
+            items = []
+        cfg[key] = items[:1000]
+    cfg["os_contains"] = str(cfg.get("os_contains") or "").strip()[:120]
 
     ad_cfg = cfg.get("ad_config") or {}
     srv_cfg = cfg.get("server_ad_config") or {}

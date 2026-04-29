@@ -125,6 +125,9 @@
         </div>
         <div class="form-row"><label data-i18n="lbl_allowed">Allowed Admins (one per line):</label><textarea id="cfgAllowed" placeholder="DOMAIN\Admin1&#10;DOMAIN\HelpDesk"></textarea></div>
         <div class="form-row"><label data-i18n="lbl_aliases">Additional domain aliases (one per line):</label><textarea id="cfgDomainAliases" placeholder="OTHERDOMAIN&#10;LEGACY"></textarea></div>
+        <div class="form-row"><label data-i18n="lbl_include_hosts">Include objects (hostname/OS, wildcard * allowed):</label><textarea id="cfgIncludeHosts" placeholder="w10-ia-19*&#10;*server*"></textarea></div>
+        <div class="form-row"><label data-i18n="lbl_exclude_hosts">Exclude objects (hostname/OS, wildcard * allowed):</label><textarea id="cfgExcludeHosts" placeholder="*test*&#10;*deprecated*"></textarea></div>
+        <div class="form-row"><label data-i18n="lbl_os_contains">OS contains filter (optional):</label><input type="text" id="cfgOsContains" placeholder="Windows 10"></div>
         <div class="form-row-inline">
             <span data-i18n="lbl_groups">Local groups to scan:</span>
             <label style="margin-left:10px"><input type="checkbox" id="grpAdministrators" checked> <span data-i18n="grp_admin">Administrators</span></label>
@@ -208,6 +211,9 @@ var LANG = {
         lbl_expand_members_cap: "Max members per expanded group:",
         lbl_allowed: "Allowed Admins (one per line):",
         lbl_aliases: "Additional domain aliases (one per line):",
+        lbl_include_hosts: "Include objects (hostname/OS, wildcard * allowed):",
+        lbl_exclude_hosts: "Exclude objects (hostname/OS, wildcard * allowed):",
+        lbl_os_contains: "OS contains filter (optional):",
         lbl_groups: "Local groups to scan:",
         grp_admin: "Administrators",
         grp_rdp: "Remote Desktop Users",
@@ -278,6 +284,10 @@ var LANG = {
         lbl_expand_groups_cap: "\u041c\u0430\u043a\u0441. \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0445 \u0433\u0440\u0443\u043f\u043f \u043d\u0430 \u0445\u043e\u0441\u0442 \u0434\u043b\u044f \u0440\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u044f:",
         lbl_expand_members_cap: "\u041c\u0430\u043a\u0441. \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u043e\u0432 \u0432 \u0440\u0430\u0437\u0432\u0451\u0440\u043d\u0443\u0442\u043e\u0439 \u0433\u0440\u0443\u043f\u043f\u0435:",
         lbl_allowed: "\u0420\u0430\u0437\u0440\u0435\u0448\u0451\u043d\u043d\u044b\u0435 \u0430\u0434\u043c\u0438\u043d\u044b (\u043f\u043e \u043e\u0434\u043d\u043e\u043c\u0443 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443):",
+        lbl_aliases: "\u0414\u043e\u043f. \u0430\u043b\u0438\u0430\u0441\u044b \u0434\u043e\u043c\u0435\u043d\u043e\u0432 (\u043f\u043e \u043e\u0434\u043d\u043e\u043c\u0443 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443):",
+        lbl_include_hosts: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043e\u0431\u044a\u0435\u043a\u0442\u044b (\u0445\u043e\u0441\u0442/\u041e\u0421, \u043c\u0430\u0441\u043a\u0430 *):",
+        lbl_exclude_hosts: "\u0418\u0441\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043e\u0431\u044a\u0435\u043a\u0442\u044b (\u0445\u043e\u0441\u0442/\u041e\u0421, \u043c\u0430\u0441\u043a\u0430 *):",
+        lbl_os_contains: "\u0424\u0438\u043b\u044c\u0442\u0440 \u043f\u043e \u041e\u0421 (\u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442):",
         lbl_groups: "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0434\u043b\u044f \u0441\u043a\u0430\u043d\u0430:",
         grp_admin: "\u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b",
         grp_rdp: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0440\u0430\u0431\u043e\u0447\u0435\u0433\u043e \u0441\u0442\u043e\u043b\u0430",
@@ -439,6 +449,7 @@ function saveSettings(){
             rpcParallelLimit:val("cfgRpcParallelLimit"),
             expandGroupsCap:val("cfgExpandGroupsCap"),expandMembersCap:val("cfgExpandMembersCap"),
             allowed:val("cfgAllowed"),domainAliases:val("cfgDomainAliases"),
+            includeHosts:val("cfgIncludeHosts"),excludeHosts:val("cfgExcludeHosts"),osContains:val("cfgOsContains"),
             groups:{
                 administrators:$("grpAdministrators").checked,
                 remoteDesktopUsers:$("grpRdp").checked,
@@ -486,6 +497,9 @@ function applySettings(d){
     if(d.expandMembersCap) $("cfgExpandMembersCap").value=d.expandMembersCap;
     if(d.allowed) $("cfgAllowed").value=d.allowed;
     if(d.domainAliases) $("cfgDomainAliases").value=d.domainAliases;
+    if(d.includeHosts) $("cfgIncludeHosts").value=d.includeHosts;
+    if(d.excludeHosts) $("cfgExcludeHosts").value=d.excludeHosts;
+    if(d.osContains) $("cfgOsContains").value=d.osContains;
     if(d.groups){
         if(d.groups.hasOwnProperty("administrators")) $("grpAdministrators").checked=asBool(d.groups.administrators, true);
         if(d.groups.hasOwnProperty("remoteDesktopUsers")) $("grpRdp").checked=asBool(d.groups.remoteDesktopUsers, false);
@@ -508,6 +522,8 @@ try{
 function doStart(){
     var allowedRaw = val("cfgAllowed"), allowed = [];
     var aliasesRaw = val("cfgDomainAliases"), domainAliases = [];
+    var includeRaw = val("cfgIncludeHosts"), includeHosts = [];
+    var excludeRaw = val("cfgExcludeHosts"), excludeHosts = [];
     if(allowedRaw){
         var lines = allowedRaw.split("\n");
         for(var i=0;i<lines.length;i++){
@@ -521,6 +537,14 @@ function doStart(){
             var alias=aliasLines[k].replace(/^\s+|\s+$/g,"");
             if(alias) domainAliases.push(alias)
         }
+    }
+    if(includeRaw){
+        var incLines = includeRaw.split("\n");
+        for(var q=0;q<incLines.length;q++){var inc=incLines[q].replace(/^\s+|\s+$/g,"");if(inc) includeHosts.push(inc);}
+    }
+    if(excludeRaw){
+        var excLines = excludeRaw.split("\n");
+        for(var w=0;w<excLines.length;w++){var exc=excLines[w].replace(/^\s+|\s+$/g,"");if(exc) excludeHosts.push(exc);}
     }
 
     var groupTargets = [];
@@ -550,6 +574,9 @@ function doStart(){
         expand_group_member_cap:Math.round(clampNumber(val("cfgExpandMembersCap"),2000,100,20000)),
         allowed_admins:allowed,
         domain_aliases:domainAliases,
+        include_hosts:includeHosts,
+        exclude_hosts:excludeHosts,
+        os_contains:val("cfgOsContains"),
         group_targets:groupTargets,
         expand_groups:$("cfgExpand").checked,
         expand_unknown_domain_accounts:$("cfgExpandUnknown").checked,
@@ -588,6 +615,9 @@ function applyStableFastPreset(){
     $("cfgRpcParallelLimit").value = 0;
     $("cfgExpandGroupsCap").value = 8;
     $("cfgExpandMembersCap").value = 1200;
+    $("cfgIncludeHosts").value = "";
+    $("cfgExcludeHosts").value = "";
+    $("cfgOsContains").value = "";
     $("cfgRpcFallback").checked = false;
     $("cfgAdaptiveRpcOnWinrmError").checked = true;
     $("cfgWmiFallback").checked = false;
@@ -606,6 +636,9 @@ function applyReliableFastPreset(){
     $("cfgRpcParallelLimit").value = 6;
     $("cfgExpandGroupsCap").value = 12;
     $("cfgExpandMembersCap").value = 2000;
+    $("cfgIncludeHosts").value = "";
+    $("cfgExcludeHosts").value = "";
+    $("cfgOsContains").value = "";
     $("cfgRpcFallback").checked = true;
     $("cfgAdaptiveRpcOnWinrmError").checked = true;
     $("cfgWmiFallback").checked = false;
