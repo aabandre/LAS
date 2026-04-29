@@ -1,307 +1,188 @@
 # Local Admin Scanner
 
-Active Directory Local Administrators auditing tool.
+Security auditing tool for discovering and analyzing members of local privileged groups on Active Directory endpoints.
 
-------------------------------------------------------------------------
+---
 
-# 🇬🇧 English
+## 🇬🇧 English
 
-## Overview
+### What it does
 
-**Local Admin Scanner** is a security auditing tool designed to detect
-and analyze members of the **local Administrators group** across
-computers in an Active Directory environment.
+**Local Admin Scanner** helps security and IT teams answer one key question:
+> Who has local administrative access on domain computers right now?
 
-The scanner automatically:
+The scanner:
 
--   discovers computers via LDAP
--   connects remotely using WinRM or WMI
--   retrieves local administrators
--   expands domain groups via LDAP
--   calculates risk scores
--   generates analytics and reports
+- discovers computers from AD via LDAP (workstations and servers OUs),
+- checks connectivity (WinRM/SMB/RDP probes),
+- collects local group memberships (Administrators and optional groups),
+- optionally expands domain groups via LDAP/GC,
+- calculates per-host risk score/severity,
+- saves scan artifacts (JSON/CSV/Summary),
+- provides a web UI + API + analytics summary.
 
-The system includes a **web interface**, **REST API**, and **analytics
-dashboard**.
+### Main capabilities
 
-------------------------------------------------------------------------
+- **Adaptive remote collection**
+  - WinRM first (when available),
+  - RPC fallback (SMB) with adaptive behavior,
+  - optional WMI fallback.
+- **Performance controls**
+  - thread limits,
+  - network and RPC concurrency limits,
+  - probe timeouts and host hard timeout,
+  - LDAP/GC group expansion caps and workers.
+- **Targeting controls**
+  - include/exclude host patterns (`*`, `?`),
+  - OS substring filter,
+  - separate workstation/server OU targeting.
+- **Operator UX**
+  - presets (Stable Fast / Reliable Fast),
+  - OU DN builder helper,
+  - bilingual interface (EN/RU),
+  - summary page with filtering, comparison, CSV export.
+
+### Quick start
 
-## Key Features
+#### Requirements
 
-### Infrastructure Discovery
+- Python 3.10+
+- Network reachability to AD/targets
+- Service account with required read/remote permissions
 
--   LDAP discovery of computers from Active Directory
--   Separate OU scanning for:
-    -   Workstations
-    -   Servers
--   DNS caching
--   Parallel scanning
+#### Install
 
-------------------------------------------------------------------------
+```bash
+pip install fastapi uvicorn ldap3 pywinrm wmi jinja2
+```
 
-### Administrator Detection
+#### Run
 
-The scanner tries multiple methods automatically:
+```bash
+python app.py
+```
 
-1.  WinRM + ADSI\
-2.  WinRM + Get-LocalGroupMember\
-3.  WinRM + net localgroup\
-4.  WMI fallback
+Open:
 
-------------------------------------------------------------------------
+- `http://127.0.0.1:8000` — main scanner page
+- `http://127.0.0.1:8000/summary` — analytics summary
 
-### Domain Group Expansion
+### Output files
 
-If a domain group is found inside local Administrators:
+Each scan creates files in `results/` (or custom `save_path`):
 
--   it is expanded via LDAP
--   nested groups are resolved recursively
--   users are mapped with **via_group**
+```text
+scan_YYYYMMDD_HHMMSS.json
+scan_YYYYMMDD_HHMMSS.csv
+summary_YYYYMMDD_HHMMSS.json
+```
 
-Example:
+### API (selected)
 
-    DOMAIN\Admins
-       └── DOMAIN\User1
-       └── DOMAIN\User2
+- `POST /scan/start` — start scan
+- `POST /scan/stop` — stop scan
+- `GET /scan/status` — progress
+- `GET /scan/results` — stream batch results
+- `GET /api/summary` — latest summary
+- `GET /api/scans` — list scan files
+- `GET /api/diff` — compare two summaries
+- `GET /download/{file}` — download artifact
 
-------------------------------------------------------------------------
+### Security recommendations
 
-### Risk Scoring
+- Use a dedicated least-privilege service account.
+- Limit management protocol exposure (WinRM/WMI/RPC) by policy.
+- Protect generated reports (they may contain sensitive account mapping).
 
-Each machine receives a calculated risk score.
+---
 
-Example logic:
+## 🇷🇺 Русская версия
 
-  Event                Score
-  -------------------- -------
-  Custom admin         +10
-  Unauthorized admin   +20
-  Builtin admin        0
+### Назначение
 
-Severity levels:
+**Local Admin Scanner** помогает быстро понять:
+> кто имеет локальные привилегии на компьютерах домена в текущий момент.
+
+Сканер:
+
+- получает список хостов из AD через LDAP (OU рабочих станций и серверов),
+- проверяет доступность протоколов (WinRM/SMB/RDP),
+- собирает участников локальных групп,
+- при необходимости разворачивает доменные группы через LDAP/GC,
+- рассчитывает риск и критичность по каждому хосту,
+- сохраняет результаты в JSON/CSV/Summary,
+- предоставляет Web UI, API и страницу сводной аналитики.
+
+### Ключевые возможности
+
+- **Адаптивный сбор**
+  - приоритет WinRM,
+  - RPC fallback (SMB),
+  - опциональный WMI fallback.
+- **Контроль производительности**
+  - лимиты потоков,
+  - ограничения сетевой и RPC-параллельности,
+  - таймауты проб и жёсткий таймаут хоста,
+  - лимиты/воркеры для разворота групп LDAP/GC.
+- **Гибкий выбор объектов**
+  - include/exclude маски (`*`, `?`),
+  - фильтр по строке ОС,
+  - отдельный выбор OU для рабочих станций и серверов.
+- **Удобство оператора**
+  - пресеты режимов (Stable Fast / Reliable Fast),
+  - помощник сборки OU DN,
+  - интерфейс EN/RU,
+  - расширенная сводка с фильтрацией, сравнением и CSV-экспортом.
+
+### Быстрый старт
+
+#### Требования
+
+- Python 3.10+
+- сетевой доступ к AD и целевым хостам
+- сервисная учётная запись с нужными правами
+
+#### Установка
+
+```bash
+pip install fastapi uvicorn ldap3 pywinrm wmi jinja2
+```
+
+#### Запуск
+
+```bash
+python app.py
+```
+
+Открыть:
+
+- `http://127.0.0.1:8000` — главная страница сканера
+- `http://127.0.0.1:8000/summary` — сводка и аналитика
+
+### Выходные файлы
+
+По каждому запуску формируются файлы в `results/` (или в `save_path`):
+
+```text
+scan_YYYYMMDD_HHMMSS.json
+scan_YYYYMMDD_HHMMSS.csv
+summary_YYYYMMDD_HHMMSS.json
+```
+
+### Основные API-методы
+
+- `POST /scan/start` — запуск сканирования
+- `POST /scan/stop` — остановка
+- `GET /scan/status` — статус/прогресс
+- `GET /scan/results` — поток результатов
+- `GET /api/summary` — последняя сводка
+- `GET /api/scans` — список файлов сканов
+- `GET /api/diff` — сравнение двух сводок
+- `GET /download/{file}` — скачивание результата
+
+### Рекомендации по безопасности
+
+- Используйте отдельную сервисную учётную запись с минимально необходимыми правами.
+- Ограничивайте доступ к WinRM/WMI/RPC на уровне политик и ACL.
+- Храните отчёты в защищённом месте (они содержат чувствительные данные по доступам).
 
-    clean
-    low
-    medium
-    high
-    critical
-
-------------------------------------------------------------------------
-
-### Analytics Dashboard
-
-The dashboard provides:
-
--   top administrator accounts
--   domain group usage
--   risky machines
--   OS statistics
--   port statistics
--   admin heatmap
--   scan comparison (diff)
-
-------------------------------------------------------------------------
-
-### Reports
-
-Each scan generates:
-
-    results/
-     ├── scan_YYYYMMDD_HHMMSS.json
-     ├── scan_YYYYMMDD_HHMMSS.csv
-     └── summary_YYYYMMDD_HHMMSS.json
-
-------------------------------------------------------------------------
-
-### API Endpoints
-
-  Endpoint             Description
-  -------------------- -------------------
-  `/scan/start`        Start scan
-  `/scan/stop`         Stop scan
-  `/scan/status`       Scan progress
-  `/scan/results`      Stream results
-  `/api/summary`       Latest analytics
-  `/api/scans`         List scan history
-  `/api/diff`          Compare two scans
-  `/download/{file}`   Download report
-
-------------------------------------------------------------------------
-
-## Architecture
-
-                    +----------------------+
-                    |      Web UI          |
-                    |  HTML + JavaScript   |
-                    +----------+-----------+
-                               |
-                         REST API (FastAPI)
-                               |
-                +--------------+--------------+
-                |                             |
-         LDAP Discovery                 Remote Execution
-                |                             |
-         Active Directory            WinRM / WMI scanning
-                |
-           Group Expansion
-                |
-           Risk Analysis
-                |
-            Report Engine
-                |
-          JSON / CSV / Summary
-
-------------------------------------------------------------------------
-
-## Installation
-
-### Requirements
-
-Python **3.10+**
-
-------------------------------------------------------------------------
-
-### Install dependencies
-
-    pip install fastapi uvicorn ldap3 pywinrm wmi jinja2
-
-------------------------------------------------------------------------
-
-## Run
-
-    python app.py
-
-Server will start at:
-
-    http://127.0.0.1:8000
-
-------------------------------------------------------------------------
-
-## Configuration
-
-Inside the web UI specify:
-
-  Parameter           Description
-  ------------------- -------------------
-  Domain Controller   AD LDAP server
-  Domain              FQDN domain
-  NetBIOS Domain      NetBIOS name
-  Username            service account
-  Password            credentials
-  Workstations OU     OU for PCs
-  Servers OU          OU for servers
-  Max Threads         parallel scanning
-  Allowed Admins      whitelist
-
-------------------------------------------------------------------------
-
-## Use Cases
-
-Security teams can use the tool for:
-
--   auditing Domain Admin exposure
--   detecting shadow administrators
--   identifying misconfigured machines
--   compliance checks
--   incident response
-
-------------------------------------------------------------------------
-
-## Security Notes
-
-Recommendations:
-
--   use a dedicated service account
--   restrict WinRM access
--   store reports securely
-
-------------------------------------------------------------------------
-
-# 🇷🇺 Русская версия
-
-## Описание
-
-**Local Admin Scanner** --- инструмент аудита локальной группы
-**Администраторы** на компьютерах в Active Directory.
-
-Сканер автоматически:
-
--   получает список компьютеров через LDAP
--   подключается к ним через WinRM или WMI
--   собирает участников локальной группы администраторов
--   разворачивает доменные группы через LDAP
--   рассчитывает уровень риска
--   формирует аналитические отчёты
-
-------------------------------------------------------------------------
-
-## Возможности
-
-### Поиск компьютеров
-
--   получение компьютеров из Active Directory
--   сканирование OU рабочих станций
--   сканирование OU серверов
--   многопоточное выполнение
-
-------------------------------------------------------------------------
-
-### Получение администраторов
-
-Используются несколько методов:
-
-1.  WinRM + ADSI\
-2.  WinRM + Get-LocalGroupMember\
-3.  WinRM + net localgroup\
-4.  WMI
-
-------------------------------------------------------------------------
-
-### Разворачивание доменных групп
-
-Если в локальных администраторах присутствует доменная группа:
-
--   она раскрывается через LDAP
--   разворачиваются вложенные группы
--   показывается через какую группу получен доступ
-
-------------------------------------------------------------------------
-
-### Аналитика
-
-В интерфейсе доступны:
-
--   топ администраторов
--   статистика по группам
--   risky machines
--   статистика ОС
--   статистика портов
--   heatmap администраторов
--   сравнение сканов
-
-------------------------------------------------------------------------
-
-### Отчёты
-
-После сканирования создаются:
-
-    results/
-     ├── scan_TIMESTAMP.json
-     ├── scan_TIMESTAMP.csv
-     └── summary_TIMESTAMP.json
-
-------------------------------------------------------------------------
-
-## Использование
-
-1.  Ввести параметры подключения к AD\
-2.  Указать OU\
-3.  Нажать **Start Scan**\
-4.  Дождаться завершения\
-5.  Скачать отчёты
-
-------------------------------------------------------------------------
-
-## License
-
-MIT License
