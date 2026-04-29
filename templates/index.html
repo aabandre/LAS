@@ -503,14 +503,18 @@ function buildOuDn(kind){
     if(upper.indexOf("DC=")>=0){
         dn=raw;
     }else{
-        var parts=raw.split("/"), ous=[];
+        var parts=raw.split("/"), ous=[], domainLower=(domain||"").toLowerCase();
         for(var i=0;i<parts.length;i++){
             var p=parts[i].replace(/^\s+|\s+$/g,"");
             if(!p) continue;
+            // Ignore accidental domain token in path input like: rosseti-sib.ru/IA/...
+            if(domainLower && p.toLowerCase()===domainLower) continue;
             if(/^OU=/i.test(p)){ous.push(p);} else {ous.push("OU="+p);}
         }
         if(!ous.length){ alert("Set valid OU"); return; }
-        dn=ous.join(",")+","+base;
+        // AD DN hierarchy is leaf-first, so reverse slash-path order:
+        // IA/Windows/Computers/DIT -> OU=DIT,OU=Computers,OU=Windows,OU=IA
+        dn=ous.reverse().join(",")+","+base;
     }
     if(kind==="work") $("cfgOuWork").value=dn; else $("cfgOuSrv").value=dn;
 }
