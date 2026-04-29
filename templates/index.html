@@ -8,7 +8,7 @@
         *{box-sizing:border-box}
         body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:15px;background:#f0f2f5;color:#333}
         h1{margin:0 0 15px;color:#1a1a2e;font-size:22px}
-        .container{max-width:1200px;margin:0 auto}
+        .container{max-width:1800px;width:96vw;margin:0 auto}
         .nav{margin-bottom:12px;overflow:hidden}
         .nav a{color:#4a90d9;text-decoration:none;font-size:14px;margin-right:15px}
         .nav a:hover{text-decoration:underline}
@@ -23,9 +23,8 @@
         .form-row textarea{height:50px;resize:vertical;font-family:Consolas,monospace;font-size:12px}
         .form-row-inline{margin-bottom:8px}
         .form-row-inline label{display:inline;font-weight:normal;font-size:13px;cursor:pointer}
-        .cols{overflow:hidden}
-        .col-left{float:left;width:48%}
-        .col-right{float:right;width:48%}
+        .cols{display:flex;gap:14px;flex-wrap:wrap}
+        .col-left,.col-right{flex:1;min-width:320px}
         .btn{padding:8px 22px;font-size:13px;font-weight:bold;border:none;border-radius:3px;cursor:pointer;margin-right:6px;margin-top:8px}
         .btn-start{background:#4a90d9;color:#fff}
         .btn-start:hover{background:#3a7bc8}
@@ -35,8 +34,8 @@
         .btn-stop[disabled]{background:#aaa;cursor:default}
         .btn-save{background:#5cb85c;color:#fff;font-size:11px;padding:4px 12px}
         .btn-save:hover{background:#4cae4c}
-        .stats{overflow:hidden;margin-bottom:8px}
-        .stat-item{float:left;width:14.28%;text-align:center;padding:6px}
+        .stats{display:grid;grid-template-columns:repeat(7,minmax(90px,1fr));gap:6px;margin-bottom:8px}
+        .stat-item{text-align:center;padding:8px;background:#fbfcff;border:1px solid #e3ebfa;border-radius:5px}
         .stat-val{font-size:22px;font-weight:bold;color:#4a90d9}
         .stat-label{font-size:10px;color:#888;text-transform:uppercase}
         .stat-err .stat-val{color:#d9534f}
@@ -61,6 +60,7 @@
         .download-links a.dl-view{background:#5bc0de}
         .filter-row{margin-bottom:8px}
         .filter-row input{width:250px;padding:4px 8px;font-size:12px}
+        @media (max-width:980px){.stats{grid-template-columns:repeat(3,minmax(90px,1fr))}}
     </style>
 </head>
 <body>
@@ -79,10 +79,17 @@
             <span data-i18n="settings_title">Connection Settings</span>
             <button class="btn btn-save" onclick="saveSettings()" data-i18n="btn_save">Save</button>
             <button class="btn btn-save" onclick="loadSettings()" data-i18n="btn_load">Load</button>
+            <button class="btn btn-save" onclick="applyStableFastPreset()" data-i18n="btn_stable_fast">⚡ Stable Fast (WinRM)</button>
+            <button class="btn btn-save" onclick="applyReliableFastPreset()" data-i18n="btn_reliable_fast">🛡 Reliable Fast (RPC+WinRM)</button>
         </h3>
+        <div style="margin:-5px 0 10px;font-size:12px;color:#666">
+            <span data-i18n="preset_hint_stable">⚡ Stable Fast: fastest mode, WinRM-only.</span>
+            <span style="margin-left:10px" data-i18n="preset_hint_reliable">🛡 Reliable Fast: adaptive RPC fallback for hosts with closed WinRM.</span>
+        </div>
         <div class="cols">
             <div class="col-left">
                 <div class="form-row"><label data-i18n="lbl_dc">Domain Controller:</label><input type="text" id="cfgServer"></div>
+                <div class="form-row"><label data-i18n="lbl_gc_servers">GC/DC servers list (comma separated):</label><input type="text" id="cfgGcServers" placeholder="dc1.domain.local,dc2.domain.local"></div>
                 <div class="form-row"><label data-i18n="lbl_domain">Domain (FQDN):</label><input type="text" id="cfgDomain"></div>
                 <div class="form-row"><label data-i18n="lbl_netbios">NetBIOS Domain:</label><input type="text" id="cfgNetbios"></div>
             </div>
@@ -91,14 +98,36 @@
                 <div class="form-row"><label data-i18n="lbl_pass">Password:</label><input type="password" id="cfgPass"></div>
                 <div class="form-row"><label data-i18n="lbl_srv_user">Server Username (optional):</label><input type="text" id="cfgSrvUser"></div>
                 <div class="form-row"><label data-i18n="lbl_srv_pass">Server Password:</label><input type="password" id="cfgSrvPass"></div>
-                <div class="form-row"><label data-i18n="lbl_threads">Max Threads:</label><input type="number" id="cfgThreads" value="30"></div>
+                <div class="form-row"><label data-i18n="lbl_threads">Max Threads:</label><input type="number" id="cfgThreads" min="1" max="200" value="30"></div>
             </div>
         </div>
         <div class="form-row"><label data-i18n="lbl_ou_work">Workstations OU:</label><input type="text" id="cfgOuWork"></div>
         <div class="form-row"><label data-i18n="lbl_ou_srv">Servers OU:</label><input type="text" id="cfgOuSrv"></div>
-        <div class="form-row"><label data-i18n="lbl_timeout">Host Timeout (sec):</label><input type="number" id="cfgTimeout" value="40"></div>
+        <div class="form-row"><label data-i18n="lbl_timeout">Host Timeout (sec):</label><input type="number" id="cfgTimeout" min="2" max="300" value="20"></div>
+        <div class="cols">
+            <div class="col-left">
+                <div class="form-row"><label data-i18n="lbl_hard_timeout">Host Hard Timeout (sec):</label><input type="number" id="cfgHardTimeout" min="10" max="900" value="45"></div>
+            </div>
+            <div class="col-right">
+                <div class="form-row"><label data-i18n="lbl_probe_winrm">WinRM Probe Timeout (sec):</label><input type="number" step="0.1" min="0.3" max="5" id="cfgProbeWinrm" value="1.0"></div>
+            </div>
+        </div>
+        <div class="form-row"><label data-i18n="lbl_probe_fast">Fast Port Probe Timeout (sec):</label><input type="number" step="0.1" min="0.1" max="3" id="cfgProbeFast" value="0.6"></div>
+        <div class="form-row"><label data-i18n="lbl_network_limit">Network Concurrency Limit (0 = auto):</label><input type="number" min="0" max="64" id="cfgNetLimit" value="0"></div>
+        <div class="form-row"><label data-i18n="lbl_rpc_parallel_limit">RPC Concurrency Limit (0 = auto):</label><input type="number" min="0" max="64" id="cfgRpcParallelLimit" value="0"></div>
+        <div class="cols">
+            <div class="col-left">
+                <div class="form-row"><label data-i18n="lbl_expand_groups_cap">Max domain groups to expand per host:</label><input type="number" min="1" max="200" id="cfgExpandGroupsCap" value="12"></div>
+            </div>
+            <div class="col-right">
+                <div class="form-row"><label data-i18n="lbl_expand_members_cap">Max members per expanded group:</label><input type="number" min="100" max="20000" id="cfgExpandMembersCap" value="2000"></div>
+            </div>
+        </div>
         <div class="form-row"><label data-i18n="lbl_allowed">Allowed Admins (one per line):</label><textarea id="cfgAllowed" placeholder="DOMAIN\Admin1&#10;DOMAIN\HelpDesk"></textarea></div>
         <div class="form-row"><label data-i18n="lbl_aliases">Additional domain aliases (one per line):</label><textarea id="cfgDomainAliases" placeholder="OTHERDOMAIN&#10;LEGACY"></textarea></div>
+        <div class="form-row"><label data-i18n="lbl_include_hosts">Include objects (hostname/OS, wildcard * allowed):</label><textarea id="cfgIncludeHosts" placeholder="w10-ia-19*&#10;*server*"></textarea></div>
+        <div class="form-row"><label data-i18n="lbl_exclude_hosts">Exclude objects (hostname/OS, wildcard * allowed):</label><textarea id="cfgExcludeHosts" placeholder="*test*&#10;*deprecated*"></textarea></div>
+        <div class="form-row"><label data-i18n="lbl_os_contains">OS contains filter (optional):</label><input type="text" id="cfgOsContains" placeholder="Windows 10"></div>
         <div class="form-row-inline">
             <span data-i18n="lbl_groups">Local groups to scan:</span>
             <label style="margin-left:10px"><input type="checkbox" id="grpAdministrators" checked> <span data-i18n="grp_admin">Administrators</span></label>
@@ -108,6 +137,10 @@
         </div>
         <div class="form-row-inline">
             <label><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
+            <label><input type="checkbox" id="cfgExpandUnknown"> <span data-i18n="lbl_expand_unknown">Expand unknown/account domain entries (slower)</span></label>
+            <label><input type="checkbox" id="cfgRpcFallback" checked> <span data-i18n="lbl_rpc_fallback">Enable RPC fallback (SMB)</span></label>
+            <label><input type="checkbox" id="cfgAdaptiveRpcOnWinrmError" checked> <span data-i18n="lbl_adaptive_rpc_on_winrm_error">If WinRM fails, still try RPC fallback</span></label>
+            <label><input type="checkbox" id="cfgWmiFallback"> <span data-i18n="lbl_wmi_fallback">Enable WMI fallback (slower)</span></label>
             <label><input type="checkbox" id="cfgDebugLog"> <span data-i18n="lbl_debug_log">Enable debug log (verbose reasons)</span></label>
         </div>
         <button class="btn btn-start" id="btnStart" onclick="doStart()" data-i18n="btn_start">Start Scan</button>
@@ -153,9 +186,12 @@ var LANG = {
         settings_title: "Connection Settings",
         btn_save: "Save",
         btn_load: "Load",
+        btn_stable_fast: "⚡ Stable Fast (WinRM)",
+        btn_reliable_fast: "🛡 Reliable Fast (RPC+WinRM)",
         btn_start: "Start Scan",
         btn_stop: "Stop",
         lbl_dc: "Domain Controller:",
+        lbl_gc_servers: "GC/DC servers list (comma separated):",
         lbl_domain: "Domain (FQDN):",
         lbl_netbios: "NetBIOS Domain:",
         lbl_user: "Username:",
@@ -166,15 +202,31 @@ var LANG = {
         lbl_ou_work: "Workstations OU:",
         lbl_ou_srv: "Servers OU:",
         lbl_timeout: "Host Timeout (sec):",
+        lbl_hard_timeout: "Host Hard Timeout (sec):",
+        lbl_probe_winrm: "WinRM Probe Timeout (sec):",
+        lbl_probe_fast: "Fast Port Probe Timeout (sec):",
+        lbl_network_limit: "Network Concurrency Limit (0 = auto):",
+        lbl_rpc_parallel_limit: "RPC Concurrency Limit (0 = auto):",
+        lbl_expand_groups_cap: "Max domain groups to expand per host:",
+        lbl_expand_members_cap: "Max members per expanded group:",
         lbl_allowed: "Allowed Admins (one per line):",
         lbl_aliases: "Additional domain aliases (one per line):",
+        lbl_include_hosts: "Include objects (hostname/OS, wildcard * allowed):",
+        lbl_exclude_hosts: "Exclude objects (hostname/OS, wildcard * allowed):",
+        lbl_os_contains: "OS contains filter (optional):",
         lbl_groups: "Local groups to scan:",
         grp_admin: "Administrators",
         grp_rdp: "Remote Desktop Users",
         grp_dcom: "Distributed COM Users",
         grp_winrm: "Remote Management Users",
         lbl_expand: "Expand domain groups via LDAP",
+        lbl_expand_unknown: "Expand unknown/account domain entries (slower)",
+        lbl_rpc_fallback: "Enable RPC fallback (SMB)",
+        lbl_adaptive_rpc_on_winrm_error: "If WinRM fails, still try RPC fallback",
+        lbl_wmi_fallback: "Enable WMI fallback (slower)",
         lbl_debug_log: "Enable debug log (verbose reasons)",
+        preset_hint_stable: "⚡ Stable Fast: fastest mode, WinRM-only.",
+        preset_hint_reliable: "🛡 Reliable Fast: adaptive RPC fallback for hosts with closed WinRM.",
         progress_title: "Progress",
         st_scanned: "Scanned",
         st_total: "Total",
@@ -190,11 +242,14 @@ var LANG = {
         log_hide_err: "Hide errors",
         scan_started: "Scan started...",
         scan_stopping: "Stopping...",
+        scan_stopped_saved: "=== STOPPED: partial results saved ===",
         scan_completed: "=== COMPLETED ===",
         fill_fields: "Fill all connection fields!",
         pass_required_work: "Workstations OU is set: enter workstation password.",
         pass_required_srv: "Servers OU is set: enter server username and password.",
         settings_saved: "Settings saved!",
+        preset_applied: "Stable Fast preset applied",
+        preset_reliable_applied: "Reliable Fast (Adaptive) preset applied",
         no_saved: "No saved settings",
         view_summary: "View Summary",
         select_group: "Select at least one local group to scan"
@@ -205,9 +260,12 @@ var LANG = {
         settings_title: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f",
         btn_save: "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c",
         btn_load: "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c",
+        btn_stable_fast: "⚡ Stable Fast (WinRM)",
+        btn_reliable_fast: "🛡 Надёжный быстрый (RPC+WinRM)",
         btn_start: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c",
         btn_stop: "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c",
         lbl_dc: "\u041a\u043e\u043d\u0442\u0440\u043e\u043b\u043b\u0435\u0440 \u0434\u043e\u043c\u0435\u043d\u0430:",
+        lbl_gc_servers: "\u0421\u043f\u0438\u0441\u043e\u043a GC/DC \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432 (\u0447\u0435\u0440\u0435\u0437 \u0437\u0430\u043f\u044f\u0442\u0443\u044e):",
         lbl_domain: "\u0414\u043e\u043c\u0435\u043d (FQDN):",
         lbl_netbios: "NetBIOS \u0434\u043e\u043c\u0435\u043d:",
         lbl_user: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:",
@@ -218,14 +276,31 @@ var LANG = {
         lbl_ou_work: "OU \u0440\u0430\u0431\u043e\u0447\u0438\u0445 \u0441\u0442\u0430\u043d\u0446\u0438\u0439:",
         lbl_ou_srv: "OU \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432:",
         lbl_timeout: "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 \u0445\u043e\u0441\u0442\u0430 (\u0441\u0435\u043a):",
+        lbl_hard_timeout: "\u0416\u0451\u0441\u0442\u043a\u0438\u0439 \u0442\u0430\u0439\u043c\u0430\u0443\u0442 \u0445\u043e\u0441\u0442\u0430 (\u0441\u0435\u043a):",
+        lbl_probe_winrm: "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 WinRM \u043f\u0440\u043e\u0431\u044b (\u0441\u0435\u043a):",
+        lbl_probe_fast: "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 \u0431\u044b\u0441\u0442\u0440\u043e\u0439 \u043f\u0440\u043e\u0431\u044b \u043f\u043e\u0440\u0442\u0430 (\u0441\u0435\u043a):",
+        lbl_network_limit: "\u041b\u0438\u043c\u0438\u0442 \u0441\u0435\u0442\u0435\u0432\u043e\u0439 \u043f\u0430\u0440\u0430\u043b\u043b\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u0438 (0 = \u0430\u0432\u0442\u043e):",
+        lbl_rpc_parallel_limit: "\u041b\u0438\u043c\u0438\u0442 RPC-\u043f\u0430\u0440\u0430\u043b\u043b\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u0438 (0 = \u0430\u0432\u0442\u043e):",
+        lbl_expand_groups_cap: "\u041c\u0430\u043a\u0441. \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0445 \u0433\u0440\u0443\u043f\u043f \u043d\u0430 \u0445\u043e\u0441\u0442 \u0434\u043b\u044f \u0440\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u044f:",
+        lbl_expand_members_cap: "\u041c\u0430\u043a\u0441. \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u043e\u0432 \u0432 \u0440\u0430\u0437\u0432\u0451\u0440\u043d\u0443\u0442\u043e\u0439 \u0433\u0440\u0443\u043f\u043f\u0435:",
         lbl_allowed: "\u0420\u0430\u0437\u0440\u0435\u0448\u0451\u043d\u043d\u044b\u0435 \u0430\u0434\u043c\u0438\u043d\u044b (\u043f\u043e \u043e\u0434\u043d\u043e\u043c\u0443 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443):",
+        lbl_aliases: "\u0414\u043e\u043f. \u0430\u043b\u0438\u0430\u0441\u044b \u0434\u043e\u043c\u0435\u043d\u043e\u0432 (\u043f\u043e \u043e\u0434\u043d\u043e\u043c\u0443 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443):",
+        lbl_include_hosts: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043e\u0431\u044a\u0435\u043a\u0442\u044b (\u0445\u043e\u0441\u0442/\u041e\u0421, \u043c\u0430\u0441\u043a\u0430 *):",
+        lbl_exclude_hosts: "\u0418\u0441\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043e\u0431\u044a\u0435\u043a\u0442\u044b (\u0445\u043e\u0441\u0442/\u041e\u0421, \u043c\u0430\u0441\u043a\u0430 *):",
+        lbl_os_contains: "\u0424\u0438\u043b\u044c\u0442\u0440 \u043f\u043e \u041e\u0421 (\u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442):",
         lbl_groups: "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0434\u043b\u044f \u0441\u043a\u0430\u043d\u0430:",
         grp_admin: "\u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u044b",
         grp_rdp: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0440\u0430\u0431\u043e\u0447\u0435\u0433\u043e \u0441\u0442\u043e\u043b\u0430",
         grp_dcom: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0440\u0430\u0441\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d\u043d\u043e\u0433\u043e COM",
         grp_winrm: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",
         lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP",
+        lbl_expand_unknown: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c unknown/account \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 (\u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0435\u0435)",
+        lbl_rpc_fallback: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c RPC fallback (SMB)",
+        lbl_adaptive_rpc_on_winrm_error: "\u0415\u0441\u043b\u0438 WinRM \u0443\u043f\u0430\u043b, \u0432\u0441\u0451 \u0440\u0430\u0432\u043d\u043e \u043f\u0440\u043e\u0431\u043e\u0432\u0430\u0442\u044c RPC fallback",
+        lbl_wmi_fallback: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c WMI fallback (\u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0435\u0435)",
         lbl_debug_log: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c debug-\u043b\u043e\u0433 (\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u044b\u0435 \u043f\u0440\u0438\u0447\u0438\u043d\u044b)",
+        preset_hint_stable: "\u26a1 Stable Fast: \u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u0438, \u0442\u043e\u043b\u044c\u043a\u043e WinRM.",
+        preset_hint_reliable: "\ud83d\udee1 Reliable Fast: \u0430\u0434\u0430\u043f\u0442\u0438\u0432\u043d\u044b\u0439 RPC fallback \u0434\u043b\u044f \u0445\u043e\u0441\u0442\u043e\u0432 \u0441 \u0437\u0430\u043a\u0440\u044b\u0442\u044b\u043c WinRM.",
         progress_title: "\u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441",
         st_scanned: "\u041f\u0440\u043e\u0441\u043a\u0430\u043d.",
         st_total: "\u0412\u0441\u0435\u0433\u043e",
@@ -241,11 +316,14 @@ var LANG = {
         log_hide_err: "\u0421\u043a\u0440\u044b\u0442\u044c \u043e\u0448\u0438\u0431\u043a\u0438",
         scan_started: "\u0421\u043a\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u043e...",
         scan_stopping: "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430...",
+        scan_stopped_saved: "=== \u041e\u0421\u0422\u0410\u041d\u041e\u0412\u041b\u0415\u041d\u041e: \u0447\u0430\u0441\u0442\u0438\u0447\u043d\u044b\u0435 \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u044b \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u044b ===",
         scan_completed: "=== \u0417\u0410\u0412\u0415\u0420\u0428\u0415\u041d\u041e ===",
         fill_fields: "\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0432\u0441\u0435 \u043f\u043e\u043b\u044f!",
         pass_required_work: "\u0417\u0430\u0434\u0430\u043d OU \u0440\u0430\u0431\u043e\u0447\u0438\u0445 \u0441\u0442\u0430\u043d\u0446\u0438\u0439: \u0432\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0430\u0440\u043e\u043b\u044c \u0434\u043b\u044f \u0440\u0430\u0431\u043e\u0447\u0438\u0445 \u0441\u0442\u0430\u043d\u0446\u0438\u0439.",
         pass_required_srv: "\u0417\u0430\u0434\u0430\u043d OU \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432: \u0432\u0432\u0435\u0434\u0438\u0442\u0435 \u043b\u043e\u0433\u0438\u043d \u0438 \u043f\u0430\u0440\u043e\u043b\u044c \u0434\u043b\u044f \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u0432.",
         settings_saved: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u044b!",
+        preset_applied: "Stable Fast \u043f\u0440\u0435\u0441\u0435\u0442 \u043f\u0440\u0438\u043c\u0435\u043d\u0451\u043d",
+        preset_reliable_applied: "Reliable Fast (Adaptive) \u043f\u0440\u0435\u0441\u0435\u0442 \u043f\u0440\u0438\u043c\u0435\u043d\u0451\u043d",
         no_saved: "\u041d\u0435\u0442 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0445 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043a",
         view_summary: "\u0421\u0432\u043e\u0434\u043a\u0430",
         select_group: "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u0443 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u0443\u044e \u0433\u0440\u0443\u043f\u043f\u0443"
@@ -353,14 +431,25 @@ function formatETA(sec){
     if(m > 0) return m + "m " + s + "s";
     return s + "s"
 }
+function clampNumber(v, defVal, minV, maxV){
+    var n = parseFloat(v);
+    if(isNaN(n)) n = defVal;
+    if(minV !== undefined && n < minV) n = minV;
+    if(maxV !== undefined && n > maxV) n = maxV;
+    return n;
+}
 
 function saveSettings(){
     try{
         var data = {
-            server:val("cfgServer"),domain:val("cfgDomain"),netbios:val("cfgNetbios"),
+            server:val("cfgServer"),gcServers:val("cfgGcServers"),domain:val("cfgDomain"),netbios:val("cfgNetbios"),
             user:val("cfgUser"),srvUser:val("cfgSrvUser"),ouWork:val("cfgOuWork"),ouSrv:val("cfgOuSrv"),
             pass:"",srvPass:"",threads:val("cfgThreads"),timeout:val("cfgTimeout"),
+            hardTimeout:val("cfgHardTimeout"),probeWinrm:val("cfgProbeWinrm"),probeFast:val("cfgProbeFast"),networkLimit:val("cfgNetLimit"),
+            rpcParallelLimit:val("cfgRpcParallelLimit"),
+            expandGroupsCap:val("cfgExpandGroupsCap"),expandMembersCap:val("cfgExpandMembersCap"),
             allowed:val("cfgAllowed"),domainAliases:val("cfgDomainAliases"),
+            includeHosts:val("cfgIncludeHosts"),excludeHosts:val("cfgExcludeHosts"),osContains:val("cfgOsContains"),
             groups:{
                 administrators:$("grpAdministrators").checked,
                 remoteDesktopUsers:$("grpRdp").checked,
@@ -368,6 +457,10 @@ function saveSettings(){
                 remoteManagementUsers:$("grpWinRm").checked
             },
             expand:$("cfgExpand").checked,
+            expandUnknown:$("cfgExpandUnknown").checked,
+            rpcFallback:$("cfgRpcFallback").checked,
+            adaptiveRpcOnWinrmError:$("cfgAdaptiveRpcOnWinrmError").checked,
+            wmiFallback:$("cfgWmiFallback").checked,
             debugLog:$("cfgDebugLog").checked
         };
         localStorage.setItem("scannerSettings",JSON.stringify(data));
@@ -386,6 +479,7 @@ function loadSettings(){
 function applySettings(d){
     if(!d) return;
     if(d.server) $("cfgServer").value=d.server;
+    if(d.gcServers) $("cfgGcServers").value=d.gcServers;
     if(d.domain) $("cfgDomain").value=d.domain;
     if(d.netbios) $("cfgNetbios").value=d.netbios;
     if(d.user) $("cfgUser").value=d.user;
@@ -394,8 +488,18 @@ function applySettings(d){
     if(d.ouSrv) $("cfgOuSrv").value=d.ouSrv;
     if(d.threads) $("cfgThreads").value=d.threads;
     if(d.timeout) $("cfgTimeout").value=d.timeout;
+    if(d.hardTimeout) $("cfgHardTimeout").value=d.hardTimeout;
+    if(d.probeWinrm) $("cfgProbeWinrm").value=d.probeWinrm;
+    if(d.probeFast) $("cfgProbeFast").value=d.probeFast;
+    if(d.networkLimit) $("cfgNetLimit").value=d.networkLimit;
+    if(d.rpcParallelLimit) $("cfgRpcParallelLimit").value=d.rpcParallelLimit;
+    if(d.expandGroupsCap) $("cfgExpandGroupsCap").value=d.expandGroupsCap;
+    if(d.expandMembersCap) $("cfgExpandMembersCap").value=d.expandMembersCap;
     if(d.allowed) $("cfgAllowed").value=d.allowed;
     if(d.domainAliases) $("cfgDomainAliases").value=d.domainAliases;
+    if(d.includeHosts) $("cfgIncludeHosts").value=d.includeHosts;
+    if(d.excludeHosts) $("cfgExcludeHosts").value=d.excludeHosts;
+    if(d.osContains) $("cfgOsContains").value=d.osContains;
     if(d.groups){
         if(d.groups.hasOwnProperty("administrators")) $("grpAdministrators").checked=asBool(d.groups.administrators, true);
         if(d.groups.hasOwnProperty("remoteDesktopUsers")) $("grpRdp").checked=asBool(d.groups.remoteDesktopUsers, false);
@@ -403,6 +507,10 @@ function applySettings(d){
         if(d.groups.hasOwnProperty("remoteManagementUsers")) $("grpWinRm").checked=asBool(d.groups.remoteManagementUsers, false);
     }
     if(d.hasOwnProperty("expand")) $("cfgExpand").checked=asBool(d.expand, true);
+    if(d.hasOwnProperty("expandUnknown")) $("cfgExpandUnknown").checked=asBool(d.expandUnknown, false);
+    if(d.hasOwnProperty("rpcFallback")) $("cfgRpcFallback").checked=asBool(d.rpcFallback, true);
+    if(d.hasOwnProperty("adaptiveRpcOnWinrmError")) $("cfgAdaptiveRpcOnWinrmError").checked=asBool(d.adaptiveRpcOnWinrmError, true);
+    if(d.hasOwnProperty("wmiFallback")) $("cfgWmiFallback").checked=asBool(d.wmiFallback, false);
     if(d.hasOwnProperty("debugLog")) $("cfgDebugLog").checked=asBool(d.debugLog, false)
 }
 
@@ -414,6 +522,8 @@ try{
 function doStart(){
     var allowedRaw = val("cfgAllowed"), allowed = [];
     var aliasesRaw = val("cfgDomainAliases"), domainAliases = [];
+    var includeRaw = val("cfgIncludeHosts"), includeHosts = [];
+    var excludeRaw = val("cfgExcludeHosts"), excludeHosts = [];
     if(allowedRaw){
         var lines = allowedRaw.split("\n");
         for(var i=0;i<lines.length;i++){
@@ -428,24 +538,52 @@ function doStart(){
             if(alias) domainAliases.push(alias)
         }
     }
+    if(includeRaw){
+        var incLines = includeRaw.split("\n");
+        for(var q=0;q<incLines.length;q++){var inc=incLines[q].replace(/^\s+|\s+$/g,"");if(inc) includeHosts.push(inc);}
+    }
+    if(excludeRaw){
+        var excLines = excludeRaw.split("\n");
+        for(var w=0;w<excLines.length;w++){var exc=excLines[w].replace(/^\s+|\s+$/g,"");if(exc) excludeHosts.push(exc);}
+    }
 
     var groupTargets = [];
     if($("grpAdministrators").checked) groupTargets.push("S-1-5-32-544");
     if($("grpRdp").checked) groupTargets.push("S-1-5-32-555");
     if($("grpDcom").checked) groupTargets.push("S-1-5-32-562");
     if($("grpWinRm").checked) groupTargets.push("S-1-5-32-580");
-    if(!groupTargets.length){ alert("Select at least one local group to scan"); return; }
+    if(!groupTargets.length){ alert(t("select_group")); return; }
+
+    var adUser = val("cfgUser"), adPass = val("cfgPass"), srvUser = val("cfgSrvUser"), srvPass = val("cfgSrvPass");
+    if(!srvUser && adUser) srvUser = adUser;
+    if(!srvPass && adPass) srvPass = adPass;
+    if(!adPass && srvPass) adPass = srvPass;
 
     var config={scan:{
-        ad_config:{server:val("cfgServer"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:val("cfgUser"),password:val("cfgPass")},
-        server_ad_config:{username:val("cfgSrvUser"),password:val("cfgSrvPass")},
+        ad_config:{server:val("cfgServer"),gc_servers:val("cfgGcServers"),domain:val("cfgDomain"),netbios_domain:val("cfgNetbios"),username:adUser,password:adPass},
+        server_ad_config:{username:srvUser,password:srvPass},
         workstations_ou:val("cfgOuWork"),servers_ou:val("cfgOuSrv"),
-        max_threads:parseInt(val("cfgThreads"),10)||30,
-        host_timeout:parseInt(val("cfgTimeout"),10)||40,
+        max_threads:Math.round(clampNumber(val("cfgThreads"),30,1,200)),
+        host_timeout:Math.round(clampNumber(val("cfgTimeout"),20,2,300)),
+        host_hard_timeout_sec:Math.round(clampNumber(val("cfgHardTimeout"),45,10,900)),
+        port_probe_timeout_winrm:clampNumber(val("cfgProbeWinrm"),1.0,0.3,5),
+        port_probe_timeout_fast:clampNumber(val("cfgProbeFast"),0.6,0.1,3),
+        network_limit:Math.round(clampNumber(val("cfgNetLimit"),0,0,64)),
+        rpc_parallel_limit:Math.round(clampNumber(val("cfgRpcParallelLimit"),0,0,64)),
+        expand_max_groups_per_host:Math.round(clampNumber(val("cfgExpandGroupsCap"),12,1,200)),
+        expand_group_member_cap:Math.round(clampNumber(val("cfgExpandMembersCap"),2000,100,20000)),
         allowed_admins:allowed,
         domain_aliases:domainAliases,
+        include_hosts:includeHosts,
+        exclude_hosts:excludeHosts,
+        os_contains:val("cfgOsContains"),
         group_targets:groupTargets,
         expand_groups:$("cfgExpand").checked,
+        expand_unknown_domain_accounts:$("cfgExpandUnknown").checked,
+        use_rpc_fallback:$("cfgRpcFallback").checked,
+        use_rpc_adaptive:true,
+        adaptive_rpc_on_winrm_error:$("cfgAdaptiveRpcOnWinrmError").checked,
+        use_wmi_fallback:$("cfgWmiFallback").checked,
         debug_log:$("cfgDebugLog").checked
     }};
     if(!config.scan.ad_config.server||!config.scan.ad_config.username){
@@ -467,7 +605,50 @@ function doStart(){
     })
 }
 
+function applyStableFastPreset(){
+    $("cfgThreads").value = 40;
+    $("cfgTimeout").value = 20;
+    $("cfgHardTimeout").value = 45;
+    $("cfgProbeWinrm").value = 1.0;
+    $("cfgProbeFast").value = 0.6;
+    $("cfgNetLimit").value = 0;
+    $("cfgRpcParallelLimit").value = 0;
+    $("cfgExpandGroupsCap").value = 8;
+    $("cfgExpandMembersCap").value = 1200;
+    $("cfgIncludeHosts").value = "";
+    $("cfgExcludeHosts").value = "";
+    $("cfgOsContains").value = "";
+    $("cfgRpcFallback").checked = false;
+    $("cfgAdaptiveRpcOnWinrmError").checked = true;
+    $("cfgWmiFallback").checked = false;
+    $("cfgExpand").checked = true;
+    $("cfgExpandUnknown").checked = false;
+    alert(t("preset_applied"));
+}
+
+function applyReliableFastPreset(){
+    $("cfgThreads").value = 40;
+    $("cfgTimeout").value = 20;
+    $("cfgHardTimeout").value = 45;
+    $("cfgProbeWinrm").value = 1.0;
+    $("cfgProbeFast").value = 0.6;
+    $("cfgNetLimit").value = 0;
+    $("cfgRpcParallelLimit").value = 6;
+    $("cfgExpandGroupsCap").value = 12;
+    $("cfgExpandMembersCap").value = 2000;
+    $("cfgIncludeHosts").value = "";
+    $("cfgExcludeHosts").value = "";
+    $("cfgOsContains").value = "";
+    $("cfgRpcFallback").checked = true;
+    $("cfgAdaptiveRpcOnWinrmError").checked = true;
+    $("cfgWmiFallback").checked = false;
+    $("cfgExpand").checked = true;
+    $("cfgExpandUnknown").checked = false;
+    alert(t("preset_reliable_applied"));
+}
+
 function doStop(){
+    $("btnStop").disabled = true;
     postJSON("/scan/stop",{},function(){
         addLog(t("scan_stopping"),"log-info","",false,null)
     })
@@ -516,7 +697,7 @@ function pollAll(){
                     addLog(prefix+names.join(", "),cls,d.computer,allB,sev)
                 }
             }else if(ev.type==="completed"){
-                addLog(t("scan_completed"),"log-done","",false,null);
+                addLog(ev.stopped ? t("scan_stopped_saved") : t("scan_completed"),"log-done","",false,null);
                 $("btnStart").disabled=false;$("btnStop").disabled=true;
                 $("cfgPass").value="";
                 $("cfgSrvPass").value="";
