@@ -2081,8 +2081,12 @@ foreach ($groupName in $candidates) {
                     e1_text = _fmt_exc(e1)
                     e1_lower = e1_text.lower()
                     last_err = smb_user + ": " + e1_text
-                    # Deterministic target/session errors: do not waste time on more retries.
-                    if " 66" in e1_lower or "error 66" in e1_lower or "2457" in e1_lower or "clock skew" in e1_lower:
+                    # Error 66 is common in some environments for IPC$ mapping with certain
+                    # credential formats. Do not stop; continue with next credential candidate.
+                    if " 66" in e1_lower or "error 66" in e1_lower:
+                        continue
+                    # Deterministic fatal target/session errors.
+                    if "2457" in e1_lower or "clock skew" in e1_lower:
                         return (False, "fatal session error: " + last_err)
                     # Retry with NetUseDel only when this looks like an existing conflicting session.
                     if "1219" not in e1_text and "multiple connections" not in e1_lower:
@@ -2135,10 +2139,10 @@ foreach ($groupName in $candidates) {
             group_attempt_errors = []
 
             for server in server_candidates:
-                # Try explicit SMB session with provided credentials (helps when process token lacks remote admin rights).
-                session_ok, session_note = _ensure_smb_session(server)
-                if not session_ok:
-                    logger.debug("RPC-SAMR session open failed for %s via %s: %s", computer, server, session_note)
+                # First try native RPC with the current process token/context.
+                # In many domains this works, while explicit NetUseAdd can fail with 66/1219.
+                session_ok, session_note = (False, "not attempted")
+                session_tried = False
                 for group_name in aliases:
                     try:
                         level_errors = []
@@ -2181,8 +2185,51 @@ foreach ($groupName in $candidates) {
                                 if fetched_any:
                                     break
                             except Exception as le:
+                                le_text = str(le).lower()
                                 level_errors.append("lvl=" + str(lvl) + ": " + _fmt_exc(le))
-                                if "access is denied" not in str(le).lower() and "'5'" not in str(le):
+                                # If access is denied, try establishing explicit SMB session once
+                                # and retry same level immediately.
+                                if (("access is denied" in le_text) or ("'5'" in le_text) or ("отказано в доступе" in le_text)) and not session_tried:
+                                    session_tried = True
+                                    session_ok, session_note = _ensure_smb_session(server)
+                                    if not session_ok:
+                                        logger.debug("RPC-SAMR session open failed for %s via %s: %s", computer, server, session_note)
+                                    else:
+                                        try:
+                                            resume = 0
+                                            while True:
+                                                data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, lvl, resume, 4096)
+                                                fetched_any = True
+                                                for item in data:
+                                                    if lvl == 2:
+                                                        raw_name = item.get("domainandname")
+                                                        sid_usage = int(item.get("sidusage", 0) or 0)
+                                                    elif lvl == 1:
+                                                        raw_name = item.get("name") or item.get("domainandname")
+                                                        sid_usage = int(item.get("sidusage", 0) or 0)
+                                                    else:
+                                                        raw_name = item.get("domainandname") or item.get("name") or item.get("sid")
+                                                        sid_usage = int(item.get("sidusage", 0) or 0)
+
+                                                    domain_and_name = str(raw_name or "").strip()
+                                                    if not domain_and_name:
+                                                        continue
+                                                    if sid_usage in (2, 4, 5):
+                                                        typ = "Group"
+                                                    elif sid_usage in (1, 6, 7):
+                                                        typ = "User"
+                                                    else:
+                                                        typ = "Account"
+                                                    key = (domain_and_name.lower(), typ, source_group)
+                                                    if key in seen:
+                                                        continue
+                                                    seen.add(key)
+                                                    members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
+                                                if not resume:
+                                                    break
+                                        except Exception as le_retry:
+                                            level_errors.append("lvl=" + str(lvl) + "-retry: " + _fmt_exc(le_retry))
+                                if "access is denied" not in le_text and "'5'" not in le_text and "отказано в доступе" not in le_text:
                                     break
 
                         if fetched_any:
