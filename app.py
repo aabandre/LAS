@@ -173,13 +173,27 @@ class DNSCache:
         if domain_hint and host_short and "." not in host_short:
             _add(host_short + "." + domain_hint)
 
-        # Try additional DNS search suffixes from local resolver config.
+        # Try additional DNS aliases from resolver. Be defensive: some wrapped
+        # runtimes may return non-standard structures.
         try:
-            cname, aliases, _ips = socket.gethostbyname_ex(host)
-            _add(cname)
-            for alias in aliases:
-                _add(alias)
-        except socket.error:
+            resolved = socket.gethostbyname_ex(host)
+            if isinstance(resolved, (tuple, list)):
+                if len(resolved) >= 1:
+                    _add(resolved[0])
+                if len(resolved) >= 2 and isinstance(resolved[1], (list, tuple)):
+                    for alias in resolved[1]:
+                        _add(alias)
+        except Exception:
+            pass
+
+        # Extra fallback: getaddrinfo often succeeds where gethostbyname_ex is limited.
+        try:
+            info = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            for row in info:
+                if len(row) >= 4:
+                    canonname = row[3]
+                    _add(canonname)
+        except Exception:
             pass
 
         for candidate in candidates:
