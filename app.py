@@ -132,8 +132,6 @@ def smart_decode(raw_bytes):
 
 PS_ENCODING_PREFIX = r"""
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
 """
 
 
@@ -146,17 +144,74 @@ class DNSCache:
         self._cache = {}
         self._lock = threading.Lock()
 
-    def resolve(self, host):
-        with self._lock:
-            if host in self._cache:
-                return self._cache[host]
+    def resolve(self, host, domain_hint=""):
+        host = str(host or "").strip()
+        if not host:
+            return None
+
+        domain_hint = str(domain_hint or "").strip()
+        candidates = []
+        seen = set()
+
+        def _add(candidate):
+            value = str(candidate or "").strip()
+            if not value:
+                return
+            key = value.lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(value)
+
+        _add(host)
+
+        host_short = host.split(".", 1)[0]
+        if host_short and host_short != host:
+            _add(host_short)
+
+        if domain_hint and host_short and "." not in host_short:
+            _add(host_short + "." + domain_hint)
+
+        # Try additional DNS aliases from resolver. Be defensive: some wrapped
+        # runtimes may return non-standard structures.
         try:
-            ip = socket.gethostbyname(host)
-        except socket.error:
-            ip = None
-        with self._lock:
-            self._cache[host] = ip
-        return ip
+            resolved = socket.gethostbyname_ex(host)
+            if isinstance(resolved, (tuple, list)):
+                if len(resolved) >= 1:
+                    _add(resolved[0])
+                if len(resolved) >= 2 and isinstance(resolved[1], (list, tuple)):
+                    for alias in resolved[1]:
+                        _add(alias)
+        except Exception:
+            pass
+
+        # Extra fallback: getaddrinfo often succeeds where gethostbyname_ex is limited.
+        try:
+            info = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            for row in info:
+                if len(row) >= 4:
+                    canonname = row[3]
+                    _add(canonname)
+        except Exception:
+            pass
+
+        for candidate in candidates:
+            with self._lock:
+                if candidate in self._cache:
+                    cached = self._cache[candidate]
+                    if cached:
+                        return cached
+                    continue
+            try:
+                ip = socket.gethostbyname(candidate)
+            except socket.error:
+                ip = None
+            with self._lock:
+                self._cache[candidate] = ip
+                if candidate != host:
+                    self._cache.setdefault(host, ip)
+            if ip:
+                return ip
+        return None
 
     def clear(self):
         with self._lock:
@@ -512,8 +567,7 @@ class Scanner:
             "3389_rdp": p3389,
         }
 
-    @staticmethod
-    def _host_candidates(hostname, ip=None):
+    def _host_candidates(self, hostname, ip=None):
         def _is_ip(value):
             try:
                 ipaddress.ip_address(str(value or '').strip())
@@ -526,8 +580,9 @@ class Scanner:
 
         host = str(hostname or '').strip()
         host_short = host.split('.', 1)[0] if host and not _is_ip(host) else ''
+        domain_hint = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
 
-        for candidate in (host, host_short, ip):
+        for candidate in (host, host_short, (host_short + "." + domain_hint) if (host_short and domain_hint and "." not in host_short) else "", ip):
             val = str(candidate or '').strip()
             key = val.lower()
             if val and key not in seen:
@@ -2210,7 +2265,8 @@ $res | ConvertTo-Json -Compress
             if self.cancelled:
                 raise RuntimeError("Cancelled")
 
-            ip = dns_cache.resolve(computer)
+            domain_hint = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
+            ip = dns_cache.resolve(computer, domain_hint=domain_hint)
             result["ip"] = ip
 
             sem = getattr(self, "net_semaphore", None)
