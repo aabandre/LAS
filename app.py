@@ -1383,14 +1383,21 @@ $result | ConvertTo-Json -Compress -Depth 3
 
             if group_members is None:
                 try:
+                    group_names = LOCAL_GROUP_NAME_ALIASES.get(sid, [group_name])
+                    ps_names = ", ".join("'" + n.replace("'", "''") + "'" for n in group_names)
                     script = r"""
-$targetSid = "__GROUP_SID__"
-$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
-$group = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
-Get-LocalGroupMember -Group $group |
-    Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}} |
-    ConvertTo-Json -Compress
-""".replace("__GROUP_SID__", sid)
+$candidates = @(__GROUP_CANDIDATES__)
+foreach ($g in $candidates) {
+    try {
+        $items = Get-LocalGroupMember -Group $g -ErrorAction Stop |
+            Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}}
+        if ($items) {
+            $items | ConvertTo-Json -Compress
+            return
+        }
+    } catch {}
+}
+""".replace("__GROUP_CANDIDATES__", ps_names)
                     raw = self._run_ps(session, script, computer)
                     members = self._extract_names(raw)
                     if members:
@@ -1401,19 +1408,26 @@ Get-LocalGroupMember -Group $group |
 
             if group_members is None:
                 try:
+                    group_names = LOCAL_GROUP_NAME_ALIASES.get(sid, [group_name])
+                    ps_names = ", ".join("'" + n.replace("'", "''") + "'" for n in group_names)
                     script = r"""
-$targetSid = "__GROUP_SID__"
-$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
-$groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
-$raw = net localgroup $groupName 2>&1
-$started = $false; $res = @()
-foreach ($line in $raw) {
-    $s = "$line".Trim()
-    if ($s -match '^-{3,}$') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
+$candidates = @(__GROUP_CANDIDATES__)
+foreach ($groupName in $candidates) {
+    try {
+        $raw = net localgroup $groupName 2>&1
+        $started = $false; $res = @()
+        foreach ($line in $raw) {
+            $s = "$line".Trim()
+            if ($s -match '^-{3,}$') { $started = $true; continue }
+            if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
+        }
+        if ($res) {
+            $res | ConvertTo-Json -Compress
+            return
+        }
+    } catch {}
 }
-$res | ConvertTo-Json -Compress
-""".replace("__GROUP_SID__", sid)
+""".replace("__GROUP_CANDIDATES__", ps_names)
                     raw = self._run_ps(session, script, computer)
                     members = self._extract_names(raw)
                     if members:
