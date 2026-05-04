@@ -135,10 +135,6 @@ $ErrorActionPreference = 'Stop'
 """
 
 
-# ═══════════════════════════════════════
-#  DNS CACHE
-# ═══════════════════════════════════════
-
 class DNSCache:
     def __init__(self):
         self._cache = {}
@@ -221,10 +217,6 @@ class DNSCache:
 dns_cache = DNSCache()
 
 
-# ═══════════════════════════════════════
-#  METRICS
-# ═══════════════════════════════════════
-
 class Metrics:
     def __init__(self):
         self._lock = threading.Lock()
@@ -270,18 +262,7 @@ class Metrics:
 metrics = Metrics()
 
 
-# ═══════════════════════════════════════
-#  SEVERITY / RISK SCORING
-# ═══════════════════════════════════════
-
 def calc_risk_score(members, allowed_admins=None):
-    """
-    Risk score per machine:
-    - Each non-builtin admin: +10
-    - Each non-allowed admin: +20
-    - Local admin account enabled: +5
-    - Domain admin present: -5 (expected)
-    """
     if allowed_admins is None:
         allowed_admins = set()
     allowed_lower = set(a.lower() for a in allowed_admins)
@@ -342,10 +323,6 @@ def _build_machine_memberships(members):
         result[group_name] = sorted_items
     return result
 
-
-# ═══════════════════════════════════════
-#  SCANNER
-# ═══════════════════════════════════════
 
 class Scanner:
 
@@ -474,7 +451,6 @@ class Scanner:
             pat = str(p or "").strip().lower()
             if not pat:
                 continue
-            # allow plain substring and shell-like wildcard patterns.
             if "*" in pat or "?" in pat:
                 if fnmatch.fnmatch(text, pat):
                     return True
@@ -513,27 +489,6 @@ class Scanner:
             return True
         except (socket.error, OSError):
             return False
-
-    def _probe_ports(self, host):
-        p5985 = False
-        p445 = False
-        p3389 = False
-
-        with ThreadPoolExecutor(max_workers=3) as probe_pool:
-            fut5985 = probe_pool.submit(self.port_open, host, 5985, 2.0)
-            fut445 = probe_pool.submit(self.port_open, host, 445, 1.2)
-            fut3389 = probe_pool.submit(self.port_open, host, 3389, 1.2)
-            p5985 = fut5985.result()
-            p445 = fut445.result()
-            p3389 = fut3389.result()
-
-        p5986 = self.port_open(host, 5986, 2.0) if not p5985 else False
-        return {
-            "5985_winrm": p5985,
-            "5986_winrm_ssl": p5986,
-            "445_smb": p445,
-            "3389_rdp": p3389,
-        }
 
     def _probe_ports_fast(self, host):
         try:
@@ -579,6 +534,11 @@ class Scanner:
         seen = set()
 
         host = str(hostname or '').strip()
+        
+        if ip and ip not in seen:
+            seen.add(ip.lower())
+            candidates.append(ip)
+            
         host_short = host.split('.', 1)[0] if host and not _is_ip(host) else ''
         domain_hint = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
 
@@ -588,6 +548,7 @@ class Scanner:
             if val and key not in seen:
                 seen.add(key)
                 candidates.append(val)
+                
         return candidates
 
     def _is_fatal_enum_error(self, text):
@@ -621,15 +582,25 @@ class Scanner:
         is_legacy = ("windows 7" in os_name) or ("windows xp" in os_name) or ("windows 2003" in os_name)
         allow_winrm = (not is_legacy) or bool(self.config.get("legacy_allow_winrm", False))
         prefer_rpc_first = is_legacy and bool(self.config.get("legacy_prefer_rpc", True))
-        rpc_enabled = bool(self.config.get("use_rpc_fallback", False)) and bool(ports.get("445_smb"))
+        rpc_enabled = bool(self.config.get("use_rpc_fallback", True))
         rpc_adaptive = bool(self.config.get("use_rpc_adaptive", True))
         details = []
         winrm_open = bool(ports.get("5985_winrm") or ports.get("5986_winrm_ssl"))
         winrm_failed = False
+        smb_open = bool(ports.get("445_smb"))
+
+        if not smb_open and not winrm_open:
+            return None, None, ["Host has no open management ports"]
+
+        force_rpc = smb_open and not winrm_open
 
         pre_plan = []
-        if prefer_rpc_first and rpc_enabled and (not rpc_adaptive or not winrm_open):
+        
+        if force_rpc:
+            pre_plan.append(("RPC-SAMR-primary", lambda: self._run_rpc_with_limit(target_host, comp_info)))
+        elif prefer_rpc_first and rpc_enabled and (not rpc_adaptive or not winrm_open):
             pre_plan.append(("RPC-SAMR-legacy-priority", lambda: self._run_rpc_with_limit(target_host, comp_info)))
+            
         if allow_winrm and ports.get("5985_winrm"):
             pre_plan.append(("WinRM", lambda: self._try_winrm_methods(target_host, comp_info=comp_info, use_ssl=False)))
         if allow_winrm and ports.get("5986_winrm_ssl"):
@@ -641,10 +612,12 @@ class Scanner:
             t0 = time.time()
             method, payload = step_fn()
             if method:
-                metric_name = method + ("-legacy-priority" if step_name == "RPC-SAMR-legacy-priority" else "")
-                metrics.add_method_timing(metric_name, time.time() - t0)
+                metric_name = method
                 if step_name == "RPC-SAMR-legacy-priority":
-                    method = method + "-legacy-priority"
+                    metric_name = method + "-legacy-priority"
+                elif step_name == "RPC-SAMR-primary":
+                    metric_name = method + "-primary"
+                metrics.add_method_timing(metric_name, time.time() - t0)
                 return method, payload, details
 
             reason = str(payload or "empty")[:220]
@@ -652,26 +625,8 @@ class Scanner:
             if step_name.startswith("WinRM"):
                 winrm_failed = True
             if self._is_fatal_enum_error(reason):
-                break
-
-        allow_rpc_after_winrm_error = bool(self.config.get("adaptive_rpc_on_winrm_error", True))
-        rpc_should_run = (
-            rpc_enabled and (
-                (not rpc_adaptive) or
-                (not winrm_open) or
-                (allow_rpc_after_winrm_error and winrm_open and winrm_failed)
-            )
-        )
-        if rpc_should_run and not prefer_rpc_first:
-            t0 = time.time()
-            method, payload = self._run_rpc_with_limit(target_host, comp_info)
-            if method:
-                metrics.add_method_timing(method, time.time() - t0)
-                return method, payload, details
-            reason = str(payload or "empty")[:220]
-            details.append("RPC-SAMR: " + reason)
-        elif rpc_enabled and rpc_adaptive and winrm_open and not winrm_failed:
-            details.append("RPC-SAMR skipped (adaptive mode: WinRM open and healthy)")
+                if not force_rpc or step_name.startswith("RPC"):
+                    break
 
         return None, None, details
 
@@ -827,7 +782,6 @@ class Scanner:
             )
         logger.info("LDAP: %d computers from %s", len(computers), ou_dn)
         return computers
-    # ── LDAP Group Expansion ──
 
     @staticmethod
     def _domain_from_dn(dn):
@@ -921,7 +875,6 @@ class Scanner:
             "))"
         )
 
-        # Если есть доменный hint и это FQDN, сначала попробуем точный base DN для него.
         hint = str(domain_hint or "").strip().lower()
         if hint and "." in hint:
             hint_base = ",".join("DC=" + p for p in hint.split("."))
@@ -1034,7 +987,6 @@ class Scanner:
                 cache[group_key] = [dict(x) for x in members]
             return members
 
-        # Fallback: direct member list (если matching-rule не поддерживается)
         raw_members = group_entry.member.values if hasattr(group_entry, "member") and group_entry.member else []
         for dn in raw_members:
             resolved = self._resolve_dn(dn, seen_groups, depth + 1)
@@ -1080,10 +1032,8 @@ class Scanner:
                 account_name, domain_hint = name.split("@", 1)
                 is_domainish = True
             elif is_group:
-                # Некоторые WMI-методы возвращают доменные группы без префикса DOMAIN\\.
                 is_domainish = True
             elif expand_unknown_accounts and obj_type.lower() in ("unknown", "account") and account_name:
-                # На части АРМ доменная группа приходит как generic Account/unknown без DOMAIN\.
                 short = account_name.split("\\", 1)[-1].lower()
                 is_domainish = short not in BUILTIN_ADMINS
 
@@ -1103,7 +1053,6 @@ class Scanner:
                     "group_expand_key": group_expand_key,
                 })
 
-        # Resolve candidate groups in parallel to reduce per-host expansion wall-time.
         resolved_map = {}
         unique_candidates = []
         seen_candidate_keys = set()
@@ -1349,7 +1298,11 @@ class Scanner:
         return expanded
 
     def _try_winrm_methods(self, computer, comp_info=None, use_ssl=False):
-        session = self._make_session(computer, comp_info=comp_info, use_ssl=use_ssl)
+        try:
+            session = self._make_session(computer, comp_info=comp_info, use_ssl=use_ssl)
+        except Exception as e:
+            return (None, "WinRM session failed: " + str(e)[:200])
+            
         selected_groups = self._get_local_groups()
         all_members = []
         method_labels = []
@@ -1374,7 +1327,6 @@ foreach ($member in $group.psbase.Invoke("Members")) {
     $domain = ""
     if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
     if ($domain -and $domain -ne $env:COMPUTERNAME) {
-        # Keep a single backslash in DOMAIN\user for downstream parsing.
         $fullname = "{0}\{1}" -f $domain, $name
     } else {
         $fullname = $name
@@ -1469,7 +1421,6 @@ foreach ($groupName in $candidates) {
             {"computer": computer, "user": wmi_user, "password": password, "namespace": r"root\cimv2", "find_classes": False},
         ]
 
-        # Some environments require explicit authority for remote WMI/DCOM.
         dom = (netbios or domain or "").strip()
         if dom and "@" not in wmi_user:
             attempts.append({
@@ -1486,7 +1437,6 @@ foreach ($groupName in $candidates) {
             try:
                 return wmi_module.WMI(**kwargs), None
             except TypeError as e:
-                # Different pywin32/wmi versions support different kwargs.
                 last_err = e
                 continue
             except Exception as e:
@@ -1522,7 +1472,6 @@ foreach ($groupName in $candidates) {
             domain = (cfg.get("domain") or "").strip()
             netbios = (cfg.get("netbios_domain") or "").strip()
 
-            # Build credential candidates: helps when one format is denied but another works.
             candidates = []
             if "\\" in username or "@" in username:
                 candidates.append(username)
@@ -1574,16 +1523,13 @@ foreach ($groupName in $candidates) {
                 nm = str(name).strip()
                 if not nm:
                     return True
-                # Ignore obvious noise that appears from some WMI providers/parsing artifacts.
                 if len(nm) == 2 and nm[1] == ":" and nm[0].isalpha():
                     return True
-                # Do not include the group SID itself as a member.
                 if nm.upper() == str(current_sid).upper():
                     return True
 
                 nm_l = nm.lower()
                 short = nm_l.split("\\", 1)[-1]
-                # Filter self/builtin alias noise that some providers return as a "member".
                 if nm_l in ("builtin\\administrators", "builtin\\администраторы"):
                     return True
                 if short in ("administrators", "администраторы") and (nm_l.startswith("builtin\\") or nm_l in ("administrators", "администраторы")):
@@ -1716,8 +1662,6 @@ foreach ($groupName in $candidates) {
                 )
                 if c is None:
                     last_err = conn_err
-                    # Do not fail fast on ACCESS_DENIED here: another credential format
-                    # (e.g. UPN vs NETBIOS\\user) may still succeed for the same account.
                     if self._is_wmi_access_denied(conn_err):
                         access_denied_users.append(wmi_user)
                     continue
@@ -1741,7 +1685,6 @@ foreach ($groupName in $candidates) {
                     for group in groups:
                         scanned_groups.append(group_name)
 
-                        # 1) Standard typed association paths
                         for rclass, rtype in [
                             ("Win32_UserAccount", "User"),
                             ("Win32_Group", "Group"),
@@ -1773,7 +1716,6 @@ foreach ($groupName in $candidates) {
                                 seen_members.add(key)
                                 members.append({"name": name, "type": member_type, "source_group": group_name})
 
-                        # 2) Raw association fallback
                         try:
                             raw_assoc = group.associators()
                         except Exception as e:
@@ -1787,7 +1729,6 @@ foreach ($groupName in $candidates) {
                             p = str(getattr(a, "Path_", ""))
                             typ = _member_type_from_path(p)
                             if not typ:
-                                # Skip non-account objects to avoid noise (e.g. logical disks).
                                 continue
                             sid_candidate = str(getattr(a, "SID", "") or "").strip()
                             if typ == "SID" or str(name).upper().startswith("S-") or sid_candidate.upper().startswith("S-"):
@@ -1804,7 +1745,6 @@ foreach ($groupName in $candidates) {
                             seen_members.add(key)
                             members.append({"name": name, "type": typ, "source_group": group_name})
 
-                        # 3) Win32_GroupUser targeted query (avoid scanning all relations globally)
                         try:
                             gdom = getattr(group, "Domain", None) or short_host
                             gname = getattr(group, "Name", None) or group_name
@@ -1841,7 +1781,6 @@ foreach ($groupName in $candidates) {
                             seen_members.add(key)
                             members.append({"name": name, "type": ptype, "source_group": group_name})
 
-                        # 3b) SID-based GroupUser query fallback (works when Domain/Name addressing misses localized entries)
                         try:
                             sid_like = sid.replace('"', '\"')
                             sid_wql = 'SELECT * FROM Win32_GroupUser WHERE GroupComponent LIKE "%%SID=\"%s\"%%"' % sid_like
@@ -1876,7 +1815,6 @@ foreach ($groupName in $candidates) {
                             seen_members.add(key)
                             members.append({"name": name, "type": ptype, "source_group": group_name})
 
-                        # 3c) Broad GroupUser scan fallback for providers where exact GroupComponent filter is unreliable.
                         if not rels and not sid_rels:
                             try:
                                 all_rels = c.query("SELECT * FROM Win32_GroupUser")
@@ -1919,7 +1857,6 @@ foreach ($groupName in $candidates) {
                                 seen_members.add(key)
                                 members.append({"name": name, "type": ptype, "source_group": group_name})
 
-                # 4) ASSOCIATORS OF fallback: often returns domain groups where standard paths are incomplete
                 for target_group in local_groups:
                     sid = target_group["sid"]
                     group_name = target_group["name"]
@@ -2014,6 +1951,7 @@ foreach ($groupName in $candidates) {
         members = []
         seen = set()
         errors = []
+        diagnostic_details = []
 
         server_candidates = []
         connected_shares = set()
@@ -2105,19 +2043,32 @@ foreach ($groupName in $candidates) {
                     except Exception as e2:
                         last_err = smb_user + ": " + _fmt_exc(e2)
                         continue
-            return (False, last_err or "session open failed")
+                        
+                    sid_usage = int(item.get("sidusage", 0) or 0)
+                    if sid_usage in (2, 4, 5):
+                        typ = "Group"
+                    elif sid_usage in (1, 6, 7):
+                        typ = "User"
+                    else:
+                        typ = "Account"
+                        
+                    processed.append({
+                        "name": domain_and_name, 
+                        "type": typ, 
+                        "source_group": source_group
+                    })
+            return processed
 
-        # IMPORTANT: do not use None here, it points to local machine context.
-        # We must query only the remote target host.
+        # Build server candidates
         full = str(computer or "").strip()
         short = ""
         try:
             ipaddress.ip_address(full)
         except ValueError:
             short = full.split(".")[0].strip()
-            # Guard against malformed numeric hostnames (e.g. partial IPv4-like labels).
             if short.replace("-", "").isdigit():
                 short = ""
+                
         for srv in (short, full):
             if not srv:
                 continue
@@ -2144,43 +2095,113 @@ foreach ($groupName in $candidates) {
                 session_ok, session_note = (False, "not attempted")
                 session_tried = False
                 for group_name in aliases:
-                    try:
-                        level_errors = []
-                        fetched_any = False
-                        for lvl in (2, 1, 0):
-                            try:
-                                resume = 0
-                                while True:
-                                    data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, lvl, resume, 4096)
-                                    fetched_any = True
-                                    for item in data:
-                                        if lvl == 2:
-                                            raw_name = item.get("domainandname")
-                                            sid_usage = int(item.get("sidusage", 0) or 0)
-                                        elif lvl == 1:
-                                            raw_name = item.get("name") or item.get("domainandname")
-                                            sid_usage = int(item.get("sidusage", 0) or 0)
-                                        else:
-                                            raw_name = item.get("domainandname") or item.get("name") or item.get("sid")
-                                            sid_usage = int(item.get("sidusage", 0) or 0)
-
-                                        domain_and_name = str(raw_name or "").strip()
-                                        if not domain_and_name:
-                                            continue
-
-                                        if sid_usage in (2, 4, 5):
-                                            typ = "Group"
-                                        elif sid_usage in (1, 6, 7):
-                                            typ = "User"
-                                        else:
-                                            typ = "Account"
-
-                                        key = (domain_and_name.lower(), typ, source_group)
-                                        if key in seen:
-                                            continue
+                    if members:
+                        break
+                        
+                    diagnostic_details.append(f"Trying group: {group_name} on {server}")
+                    
+                    # Try different access levels
+                    for lvl in [2, 1, 0]:
+                        if members:
+                            break
+                            
+                        data, error = _try_get_members(server, group_name, lvl)
+                        
+                        if data is not None:
+                            if data:
+                                # Success! Process the data
+                                processed = _process_members(data, source_group)
+                                for member_data in processed:
+                                    key = (member_data["name"].lower(), member_data["type"], member_data["source_group"])
+                                    if key not in seen:
                                         seen.add(key)
-                                        members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
-                                    if not resume:
+                                        members.append(member_data)
+                                        
+                                if members:
+                                    diagnostic_details.append(
+                                        f"SUCCESS: Got {len(members)} members from {group_name} "
+                                        f"(level {lvl}) on {server}"
+                                    )
+                                    break
+                            else:
+                                diagnostic_details.append(
+                                    f"Empty result for {group_name} (level {lvl}) on {server}"
+                                )
+                        else:
+                            err_text = _fmt_exc(error).lower()
+                            
+                            # RPC unavailable - no point trying other levels
+                            if "1722" in err_text or "rpc недоступен" in err_text:
+                                diagnostic_details.append(
+                                    f"RPC unavailable for {server} ({err_text[:100]})"
+                                )
+                                break
+                                
+                            # Access denied - try establishing session
+                            if "access is denied" in err_text or "'5'" in err_text or "отказано в доступе" in err_text:
+                                diagnostic_details.append(
+                                    f"Access denied for {group_name} (level {lvl}): {err_text[:100]}"
+                                )
+                                
+                                # Try to establish SMB session
+                                if WIN32NETCON_AVAILABLE:
+                                    diagnostic_details.append("Attempting SMB session...")
+                                    
+                                    # Try multiple credential formats
+                                    for cred_format in [
+                                        f"{netbios}\\{user_base}" if netbios else None,
+                                        f"{domain}\\{user_base}" if domain else None,
+                                        user_base,
+                                        f"{user_base}@{domain}" if domain else None,
+                                    ]:
+                                        if not cred_format:
+                                            continue
+                                            
+                                        try:
+                                            ipc_remote = f"{server}\\IPC$"
+                                            ui2 = {
+                                                "remote": ipc_remote,
+                                                "password": password,
+                                                "username": cred_format,
+                                                "asg_type": getattr(win32netcon, "USE_IPC", 3),
+                                            }
+                                            win32net.NetUseAdd(None, 2, ui2)
+                                            connected_shares.add(ipc_remote)
+                                            diagnostic_details.append(
+                                                f"SMB session established with {cred_format}"
+                                            )
+                                            
+                                            # Retry with session
+                                            data_retry, error_retry = _try_get_members(
+                                                server, group_name, lvl
+                                            )
+                                            if data_retry:
+                                                processed = _process_members(data_retry, source_group)
+                                                for member_data in processed:
+                                                    key = (
+                                                        member_data["name"].lower(),
+                                                        member_data["type"],
+                                                        member_data["source_group"]
+                                                    )
+                                                    if key not in seen:
+                                                        seen.add(key)
+                                                        members.append(member_data)
+                                                        
+                                                if members:
+                                                    diagnostic_details.append(
+                                                        f"SUCCESS after SMB session: {len(members)} members"
+                                                    )
+                                                    break
+                                                    
+                                            break  # Session established, no need to try other formats
+                                            
+                                        except Exception as e:
+                                            diagnostic_details.append(
+                                                f"SMB session failed with {cred_format}: {_fmt_exc(e)[:100]}"
+                                            )
+                                            continue
+                                    
+                                    if members:
                                         break
                                 if fetched_any:
                                     break
@@ -2256,6 +2277,7 @@ foreach ($groupName in $candidates) {
                 else:
                     errors.append(source_group + ": no successful attempts")
 
+        # Cleanup SMB sessions
         if WIN32NETCON_AVAILABLE:
             for remote in list(connected_shares):
                 try:
@@ -2263,65 +2285,24 @@ foreach ($groupName in $candidates) {
                 except Exception:
                     pass
 
+        # Return results or detailed error
         if members:
+            logger.info(
+                "RPC-SAMR success for %s: %d members (diagnostics: %s)",
+                computer, len(members), "; ".join(diagnostic_details[-3:])
+            )
             return ("RPC-SAMR", members)
-
-        # If primary credentials failed, try alternate server credential set once.
-        if _cfg_override is None:
-            override = dict(self.config.get("server_ad_config", {}) or {})
-            if override:
-                alt_cfg = dict(self.config.get("ad_config", {}) or {})
-                for key in ("username", "password", "domain", "netbios_domain", "server"):
-                    val = override.get(key)
-                    if val:
-                        alt_cfg[key] = val
-                if alt_cfg:
-                    cur_user = str(cfg.get("username") or "")
-                    cur_pass = str(cfg.get("password") or "")
-                    alt_user = str(alt_cfg.get("username") or "")
-                    alt_pass = str(alt_cfg.get("password") or "")
-                    if (alt_user, alt_pass) != (cur_user, cur_pass):
-                        m2, r2 = self._try_rpc_samr(computer, comp_info=comp_info, _cfg_override=alt_cfg)
-                        if m2:
-                            return (m2, r2)
-                        if r2:
-                            errors.append("alt-creds: " + str(r2)[:200])
-
-        if errors:
-            return (None, "RPC-SAMR: " + "; ".join(errors))
-        return (None, "RPC-SAMR: empty")
-
-
-    # Backward compatibility alias for previous config/docs.
-    def _try_smb_netapi(self, computer, comp_info=None):
-        return self._try_rpc_samr(computer, comp_info=comp_info)
-
-    def _build_target_candidates(self, computer, ip=None):
-        candidates = []
-
-        def _add(val):
-            v = str(val or "").strip()
-            if not v:
-                return
-            key = v.lower()
-            if key not in seen:
-                seen.add(key)
-                candidates.append(v)
-
-        seen = set()
-        host = str(computer or "").strip()
-        short = host.split(".", 1)[0] if host else ""
-
-        _add(host)
-        _add(short)
-
-        domain = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
-        if short and domain and "." not in short:
-            _add(short + "." + domain)
-
-        _add(ip)
-        return candidates
-
+        else:
+            # Build detailed error message
+            error_msg = "RPC-SAMR: no data returned"
+            if diagnostic_details:
+                # Show last few diagnostic messages
+                recent = diagnostic_details[-5:]
+                error_msg += " | Diagnostics: " + "; ".join(recent)
+                
+            logger.debug("RPC-SAMR failed for %s: %s", computer, error_msg)
+            return (None, error_msg)
+        
     def scan_machine(self, comp_info):
         computer = comp_info["hostname"]
         os_name = comp_info.get("os", "")
@@ -2342,6 +2323,9 @@ foreach ($groupName in $candidates) {
             ip = dns_cache.resolve(computer, domain_hint=domain_hint)
             result["ip"] = ip
 
+            if not ip:
+                raise RuntimeError("DNS failed")
+
             sem = getattr(self, "net_semaphore", None)
             if sem is not None:
                 queue_timeout = self._cfg_int("network_queue_timeout_sec", 30, minimum=5, maximum=300)
@@ -2354,9 +2338,8 @@ foreach ($groupName in $candidates) {
                 sem_acquired = True
 
             deadline = time.time() + self._cfg_int("host_hard_timeout_sec", 45, minimum=10, maximum=900)
+            
             targets = self._host_candidates(computer, ip)
-            if not ip:
-                targets = [computer]
 
             aggregate_ports = {
                 "5985_winrm": False,
@@ -2392,12 +2375,11 @@ foreach ($groupName in $candidates) {
 
                 for item in (try_details or []):
                     details.append(candidate + ": " + str(item))
-                if any(self._is_fatal_enum_error(x) for x in (try_details or [])):
+                
+                if any(self._is_fatal_enum_error(x) and "1722" not in str(x) and "rpc недоступен" not in str(x).lower() for x in (try_details or [])):
                     break
 
             result["ports"] = aggregate_ports
-            # Important performance optimization:
-            # release shared network slot BEFORE LDAP group expansion/risk post-processing.
             if sem_acquired and getattr(self, "net_semaphore", None) is not None:
                 try:
                     self.net_semaphore.release()
@@ -2406,16 +2388,12 @@ foreach ($groupName in $candidates) {
                     pass
 
             if resolved_members is None:
-                if not ip:
-                    base_error = "DNS failed"
-                elif not any(aggregate_ports.values()):
+                if not any(aggregate_ports.values()):
                     base_error = "Host OFFLINE. IP: " + str(ip)
-                elif any("access denied" in str(d).lower() for d in details):
+                elif any("access denied" in str(d).lower() or "отказано" in str(d).lower() for d in details):
                     base_error = "Host ALIVE, but access denied for remote enumeration"
                 elif aggregate_ports["445_smb"] and not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"]:
-                    base_error = "Host ALIVE (SMB), WinRM CLOSED"
-                elif aggregate_ports["3389_rdp"] and not aggregate_ports["5985_winrm"] and not aggregate_ports["5986_winrm_ssl"]:
-                    base_error = "Host ALIVE (RDP), WinRM CLOSED"
+                    base_error = "Host ALIVE (SMB), RPC enumeration failed (check permissions)"
                 else:
                     base_error = "All methods failed"
                 if details:
@@ -2540,7 +2518,6 @@ foreach ($groupName in $candidates) {
                 })
                 return
 
-            # Adaptive threads
             max_cfg = int(config.get("max_threads", 30))
             cpu_hint = max(4, (os.cpu_count() or 4) * 8)
             hard_cap = min(64, cpu_hint)
@@ -2559,7 +2536,7 @@ foreach ($groupName in $candidates) {
                 net_limit = 0
                 self.net_semaphore = None
             rpc_limit_cfg = int(config.get("rpc_parallel_limit", 0) or 0)
-            if bool(config.get("use_rpc_fallback", False)):
+            if bool(config.get("use_rpc_fallback", True)):
                 if rpc_limit_cfg <= 0:
                     rpc_limit = max(1, min(8, max_w // 4 or 1))
                 else:
@@ -2572,7 +2549,6 @@ foreach ($groupName in $candidates) {
             probe_workers = min(64, max(8, max_w * 2))
             self.probe_executor = ThreadPoolExecutor(max_workers=probe_workers)
             logger.info("Thread pool size: %d (requested=%d, cap=%d)", max_w, max_cfg, hard_cap)
-            logger.info("Network concurrency limit: %s", "disabled" if net_limit == 0 else str(net_limit))
             logger.info("Port probe pool size: %d", probe_workers)
             futs = {}
             for c in unique:
@@ -2698,7 +2674,6 @@ foreach ($groupName in $candidates) {
                     except Exception:
                         pass
 
-            # Clear password from memory
             if self.config.get("ad_config"):
                 self.config["ad_config"]["password"] = "***CLEARED***"
             if self.config.get("server_ad_config"):
@@ -2715,9 +2690,9 @@ foreach ($groupName in $candidates) {
 
     def _build_summary(self, all_results):
         member_to_computers = defaultdict(list)
-        member_via_groups = defaultdict(set)      # НОВОЕ: какие группы привели этого участника
-        member_types = defaultdict(set)           # НОВОЕ: какие типы объектов были у участника
-        via_group_counts = defaultdict(int)        # НОВОЕ: сколько раз каждая группа встречается
+        member_via_groups = defaultdict(set)
+        member_types = defaultdict(set)
+        via_group_counts = defaultdict(int)
         method_counts = defaultdict(int)
         error_types = defaultdict(int)
         os_counts = defaultdict(int)
@@ -2769,8 +2744,8 @@ foreach ($groupName in $candidates) {
                     error_types["DNS failed"] += 1
                 elif "OFFLINE" in err:
                     error_types["Host offline"] += 1
-                elif "WinRM CLOSED" in err:
-                    error_types["WinRM closed"] += 1
+                elif "WinRM CLOSED" in err or "RPC enumeration failed" in err:
+                    error_types["WinRM/RPC unavailable"] += 1
                 elif "Access" in err or "401" in err:
                     error_types["Access denied"] += 1
                 else:
@@ -2797,18 +2772,13 @@ foreach ($groupName in $candidates) {
             has_nonbuiltin = False
             nonbuiltin_names = []
 
-            # ═══════════════════════════════════════
-            #  ОБРАБОТКА MEMBERS с учётом via_group
-            # ═══════════════════════════════════════
             for m in res.get("members", []):
                 name = m.get("name", "")
                 if not name:
                     continue
 
-                # Добавляем в маппинг member -> computers
                 member_to_computers[name].append(res["computer"])
 
-                # Если участник пришёл через группу — запоминаем
                 via = m.get("via_group", "")
                 if via:
                     member_via_groups[name].add(via)
@@ -2828,9 +2798,6 @@ foreach ($groupName in $candidates) {
             else:
                 clean_machines.append(res["computer"])
 
-        # ═══════════════════════════════════════
-        #  ФОРМИРУЕМ top_admins — ВСЕ аккаунты
-        # ═══════════════════════════════════════
         all_admins_sorted = sorted(
             member_to_computers.items(),
             key=lambda x: len(x[1]),
@@ -2851,7 +2818,6 @@ foreach ($groupName in $candidates) {
                 "\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440",
             )
 
-            # Собираем через какие группы этот аккаунт попал
             via_groups = sorted(member_via_groups.get(name, set()))
 
             types_for_member = sorted(member_types.get(name, set()))
@@ -2867,9 +2833,6 @@ foreach ($groupName in $candidates) {
                 "machines": sorted(set(machines)),
             })
 
-        # ═══════════════════════════════════════
-        #  Статистика по группам (топ-20 групп)
-        # ═══════════════════════════════════════
         top_groups = sorted(
             via_group_counts.items(),
             key=lambda x: x[1],
@@ -2905,6 +2868,7 @@ foreach ($groupName in $candidates) {
             "machine_memberships": machine_memberships,
             "metrics": metrics.get_stats(),
         }
+
     def stop(self):
         self.cancelled = True
         if self.executor:
@@ -2923,9 +2887,6 @@ foreach ($groupName in $candidates) {
 scanner = Scanner()
 
 def _rebuild_admins_from_scan(summary_filename, summary_data):
-    """
-    Находит scan_*.json и пересчитывает всё из сырых данных.
-    """
     ts = summary_filename.replace("summary_", "").replace(".json", "")
     scan_filename = "scan_" + ts + ".json"
     scan_path = os.path.join(scanner._results_dir, scan_filename)
@@ -2948,10 +2909,6 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
     results = scan_data.get("results", [])
     if not results:
         return None
-
-    # ═══════════════════════════════════════
-    #  Пересчитываем ВСЁ из сырых результатов
-    # ═══════════════════════════════════════
 
     member_to_computers = defaultdict(list)
     member_via_groups = defaultdict(set)
@@ -3008,8 +2965,8 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
                 error_types["DNS failed"] += 1
             elif "OFFLINE" in err:
                 error_types["Host offline"] += 1
-            elif "WinRM CLOSED" in err:
-                error_types["WinRM closed"] += 1
+            elif "WinRM CLOSED" in err or "RPC enumeration failed" in err:
+                error_types["WinRM/RPC unavailable"] += 1
             elif "Access" in err or "401" in err:
                 error_types["Access denied"] += 1
             else:
@@ -3036,9 +2993,6 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
         has_nonbuiltin = False
         nonbuiltin_names = []
 
-        # ═══════════════════════════════════════
-        #  ОБРАБОТКА MEMBERS с учётом via_group
-        # ═══════════════════════════════════════
         for m in res.get("members", []):
             name = m.get("name", "")
             if not name:
@@ -3065,9 +3019,6 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
         else:
             clean_machines.append(res["computer"])
 
-    # ═══════════════════════════════════════
-    #  ФОРМИРУЕМ top_admins — ВСЕ без лимита
-    # ═══════════════════════════════════════
     all_admins_sorted = sorted(
         member_to_computers.items(),
         key=lambda x: len(x[1]),
@@ -3140,9 +3091,7 @@ def _rebuild_admins_from_scan(summary_filename, summary_data):
     }
 
     return rebuilt
-# ═══════════════════════════════════════
-#  ROUTES
-# ═══════════════════════════════════════
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -3169,7 +3118,6 @@ async def api_summary():
 
 @app.get("/api/summary/load/{filename}")
 async def api_load_summary(filename: str):
-    """Load a specific summary JSON file."""
     safe = os.path.basename(filename)
     path = os.path.join(scanner._results_dir, safe)
     if not os.path.isfile(path):
@@ -3186,7 +3134,6 @@ async def api_load_summary(filename: str):
 
 @app.get("/api/scans")
 async def api_list_scans():
-    """List all available scan files."""
     results_dir = scanner._results_dir
     scans = []
     try:
@@ -3219,7 +3166,6 @@ async def api_diff(
     scan1: str = Query(..., description="First summary filename"),
     scan2: str = Query(..., description="Second summary filename"),
 ):
-    """Compare two summary files and return diff."""
     def load_summary(fname):
         path = os.path.join(scanner._results_dir, os.path.basename(fname))
         if not os.path.isfile(path):
@@ -3230,7 +3176,6 @@ async def api_diff(
     s1 = load_summary(scan1)
     s2 = load_summary(scan2)
 
-    # Build member sets
     def get_member_set(summary):
         result = {}
         for admin in summary.get("top_admins", []):
@@ -3247,7 +3192,6 @@ async def api_diff(
     removed = sorted(set1 - set2)
     unchanged = sorted(set1 & set2)
 
-    # Parse added/removed into structured data
     def parse_entries(entries):
         result = []
         for e in entries:
@@ -3285,11 +3229,9 @@ async def api_filter_results(
     has_error: bool = Query(None),
     search: str = Query(None),
 ):
-    """Filter last scan results."""
     if not scanner._last_summary:
         return []
 
-    # Load last scan JSON
     results_dir = scanner._results_dir
     scan_files = sorted(glob.glob(os.path.join(results_dir, "scan_*.json")), reverse=True)
     if not scan_files:
@@ -3340,7 +3282,6 @@ async def start_scan(request: Request):
     if not cfg:
         return JSONResponse({"error": "Missing config"}, status_code=400)
 
-    # Backward compatibility: allow legacy checkbox payload under scan.groups
     if "group_targets" not in cfg and isinstance(cfg.get("groups"), dict):
         groups = cfg.get("groups") or {}
         group_targets = []
@@ -3357,7 +3298,6 @@ async def start_scan(request: Request):
     if isinstance(cfg.get("group_targets"), list) and not cfg.get("group_targets"):
         return JSONResponse({"error": "Select at least one local group to scan"}, status_code=400)
 
-    # Optional object-level filters for convenient target selection.
     for key in ("include_hosts", "exclude_hosts"):
         raw = cfg.get(key, [])
         if isinstance(raw, str):
@@ -3374,9 +3314,6 @@ async def start_scan(request: Request):
     work_ou = str(cfg.get("workstations_ou") or "").strip()
     srv_ou = str(cfg.get("servers_ou") or "").strip()
 
-    # Credentials fallback to reduce operator friction:
-    # - If server creds are omitted, reuse workstation creds.
-    # - If workstation password is omitted but server password is present, reuse it.
     if not str(srv_cfg.get("username") or "").strip() and str(ad_cfg.get("username") or "").strip():
         srv_cfg["username"] = ad_cfg.get("username")
     if not str(srv_cfg.get("password") or "").strip() and str(ad_cfg.get("password") or "").strip():
@@ -3386,7 +3323,6 @@ async def start_scan(request: Request):
     cfg["ad_config"] = ad_cfg
     cfg["server_ad_config"] = srv_cfg
 
-    # Sanitize runtime tuning values to avoid unusable tiny timeouts from UI input.
     try:
         cfg["host_timeout"] = max(2, min(300, int(cfg.get("host_timeout", 20))))
     except (TypeError, ValueError):
