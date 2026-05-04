@@ -2069,9 +2069,9 @@ foreach ($groupName in $candidates) {
                     "remote": ipc_remote,
                     "password": password,
                     "username": smb_user,
-                    # USE_WILDCARD can trigger NetUseAdd(66) in some environments.
-                    # 0 lets the API auto-detect the correct remote resource type.
-                    "asg_type": 0,
+                    # IPC$ is an inter-process communication share. Force IPC type
+                    # to avoid NetUseAdd(66) "wrong network resource type".
+                    "asg_type": getattr(win32netcon, "USE_IPC", 3),
                 }
                 try:
                     win32net.NetUseAdd(None, 2, ui2)
