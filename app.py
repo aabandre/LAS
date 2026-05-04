@@ -120,7 +120,7 @@ templates = Jinja2Templates(directory=templates_dir)
 def smart_decode(raw_bytes):
     if not raw_bytes:
         return ""
-    for enc in ["utf-8-sig", "utf-8", "cp1251", "cp866"]:
+    for enc in ["utf-8-sig", "utf-8", "utf-16-le", "utf-16-be", "cp1251", "cp866"]:
         try:
             text = raw_bytes.decode(enc)
             if "\ufffd" not in text:
@@ -1260,10 +1260,20 @@ class Scanner:
             if isinstance(item, dict):
                 name = item.get("Name") or item.get("name") or ""
                 obj_type = item.get("Type") or item.get("ObjectClass") or item.get("type") or "unknown"
+                sid = str(item.get("SID") or item.get("Sid") or item.get("sid") or "").strip()
             else:
                 name = str(item)
                 obj_type = "unknown"
+                sid = ""
             name = name.strip()
+            # Constrained/legacy hosts can return mojibake or masked local account names.
+            # If SID identifies RID-500, normalize to a stable built-in Administrator label.
+            if sid.endswith("-500") and ("?" in name or "Ђ" in name or "¤" in name):
+                if "\\" in name:
+                    host_part = name.split("\\", 1)[0].strip() or "LOCALHOST"
+                    name = host_part + "\\Administrator"
+                else:
+                    name = "Administrator"
             if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
                 names.append({"name": name, "type": obj_type})
         return names
@@ -1390,7 +1400,7 @@ $candidates = @(__GROUP_CANDIDATES__)
 foreach ($g in $candidates) {
     try {
         $items = Get-LocalGroupMember -Group $g -ErrorAction Stop |
-            Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}}
+            Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}}, @{N='SID';E={if ($_.SID) { $_.SID.Value } else { '' }}}
         if ($items) {
             $items | ConvertTo-Json -Compress
             return
