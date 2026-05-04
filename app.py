@@ -175,8 +175,10 @@ class DNSCache:
 
         # Try additional DNS search suffixes from local resolver config.
         try:
-            for _cname, _aliaslist, _ips in socket.gethostbyname_ex(host):
-                _add(_cname)
+            cname, aliases, _ips = socket.gethostbyname_ex(host)
+            _add(cname)
+            for alias in aliases:
+                _add(alias)
         except socket.error:
             pass
 
