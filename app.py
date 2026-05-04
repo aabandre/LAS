@@ -167,8 +167,6 @@ class DNSCache:
         if domain_hint and host_short and "." not in host_short:
             _add(host_short + "." + domain_hint)
 
-        # Try additional DNS aliases from resolver. Be defensive: some wrapped
-        # runtimes may return non-standard structures.
         try:
             resolved = socket.gethostbyname_ex(host)
             if isinstance(resolved, (tuple, list)):
@@ -180,7 +178,6 @@ class DNSCache:
         except Exception:
             pass
 
-        # Extra fallback: getaddrinfo often succeeds where gethostbyname_ex is limited.
         try:
             info = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
             for row in info:
@@ -189,6 +186,15 @@ class DNSCache:
                     _add(canonname)
         except Exception:
             pass
+
+        for candidate in candidates[:]:
+            try:
+                for suffix in ["", ".rosseti-sib.ru", ".local", ".corp"]:
+                    test_name = candidate if suffix == "" else candidate.split(".")[0] + suffix
+                    if test_name not in seen:
+                        _add(test_name)
+            except Exception:
+                pass
 
         for candidate in candidates:
             with self._lock:
@@ -542,7 +548,7 @@ class Scanner:
         host_short = host.split('.', 1)[0] if host and not _is_ip(host) else ''
         domain_hint = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
 
-        for candidate in (host, host_short, (host_short + "." + domain_hint) if (host_short and domain_hint and "." not in host_short) else "", ip):
+        for candidate in (host, host_short, (host_short + "." + domain_hint) if (host_short and domain_hint and "." not in host_short) else ""):
             val = str(candidate or '').strip()
             key = val.lower()
             if val and key not in seen:
@@ -1215,8 +1221,6 @@ class Scanner:
                 obj_type = "unknown"
                 sid = ""
             name = name.strip()
-            # Constrained/legacy hosts can return mojibake or masked local account names.
-            # If SID identifies RID-500, normalize to a stable built-in Administrator label.
             if sid.endswith("-500") and ("?" in name or "Ђ" in name or "¤" in name):
                 if "\\" in name:
                     host_part = name.split("\\", 1)[0].strip() or "LOCALHOST"
@@ -1966,82 +1970,37 @@ foreach ($groupName in $candidates) {
                 txt = txt[:180]
             return txt
 
-        def _smb_user_candidates():
-            candidates = []
-            if not user_base:
-                return candidates
+        def _try_get_members(server, group_name, level):
+            """Try to get group members with detailed error tracking"""
+            result = []
+            resume = 0
+            try:
+                while True:
+                    data, total, resume = win32net.NetLocalGroupGetMembers(
+                        server, group_name, level, resume, 4096
+                    )
+                    if data:
+                        result.extend(data)
+                    if not resume:
+                        break
+                return result, None
+            except Exception as e:
+                return None, e
 
-            base_short = user_base
-            if "\\" in user_base:
-                base_short = user_base.split("\\", 1)[1].strip() or user_base
-            elif "@" in user_base:
-                base_short = user_base.split("@", 1)[0].strip() or user_base
-
-            if netbios and base_short:
-                candidates.append(netbios + "\\" + base_short)
-            if base_short:
-                candidates.append(base_short)
-            candidates.append(user_base)
-            if domain and base_short:
-                candidates.append(base_short + "@" + domain)
-
-            uniq = []
-            seen = set()
-            for cnd in candidates:
-                key = cnd.lower()
-                if cnd and key not in seen:
-                    seen.add(key)
-                    uniq.append(cnd)
-            return uniq
-
-        def _ensure_smb_session(server):
-            if not WIN32NETCON_AVAILABLE:
-                return (False, "win32netcon unavailable")
-            users = _smb_user_candidates()
-            if not users:
-                return (False, "no smb user candidates")
-            ipc_remote = str(server) + r"\IPC$"
-            last_err = ""
-            for smb_user in users:
-                ui2 = {
-                    "remote": ipc_remote,
-                    "password": password,
-                    "username": smb_user,
-                    # IPC$ is an inter-process communication share. Force IPC type
-                    # to avoid NetUseAdd(66) "wrong network resource type".
-                    "asg_type": getattr(win32netcon, "USE_IPC", 3),
-                }
-                try:
-                    win32net.NetUseAdd(None, 2, ui2)
-                    connected_shares.add(ipc_remote)
-                    return (True, "session user=" + smb_user)
-                except Exception as e1:
-                    e1_text = _fmt_exc(e1)
-                    e1_lower = e1_text.lower()
-                    last_err = smb_user + ": " + e1_text
-                    # Error 66 is common in some environments for IPC$ mapping with certain
-                    # credential formats. Do not stop; continue with next credential candidate.
-                    if " 66" in e1_lower or "error 66" in e1_lower:
-                        continue
-                    # Deterministic fatal target/session errors.
-                    if "2457" in e1_lower or "clock skew" in e1_lower:
-                        return (False, "fatal session error: " + last_err)
-                    # Retry with NetUseDel only when this looks like an existing conflicting session.
-                    if "1219" not in e1_text and "multiple connections" not in e1_lower:
-                        continue
-                    try:
-                        try:
-                            win32net.NetUseDel(None, ipc_remote, 2)
-                        except Exception as del_err:
-                            del_text = _fmt_exc(del_err).lower()
-                            # 2250 means there was no mapped connection to delete; proceed with retry add.
-                            if "2250" not in del_text and "could not be found" not in del_text:
-                                raise
-                        win32net.NetUseAdd(None, 2, ui2)
-                        connected_shares.add(ipc_remote)
-                        return (True, "session(retry) user=" + smb_user)
-                    except Exception as e2:
-                        last_err = smb_user + ": " + _fmt_exc(e2)
+        def _process_members(data, source_group):
+            """Process raw member data into structured format"""
+            processed = []
+            for item in data:
+                if isinstance(item, dict):
+                    if 'domainandname' in item:
+                        raw_name = item.get("domainandname")
+                    elif 'name' in item:
+                        raw_name = item.get("name")
+                    else:
+                        raw_name = item.get("sid", "")
+                    
+                    domain_and_name = str(raw_name or "").strip()
+                    if not domain_and_name:
                         continue
                         
                     sid_usage = int(item.get("sidusage", 0) or 0)
@@ -2076,24 +2035,29 @@ foreach ($groupName in $candidates) {
             if candidate not in server_candidates:
                 server_candidates.append(candidate)
 
-        for target_group in local_groups:
-            sid = target_group["sid"]
-            source_group = target_group["name"]
-            aliases = []
-            for nm in LOCAL_GROUP_NAME_ALIASES.get(sid, []):
-                if nm and nm not in aliases:
-                    aliases.append(nm)
-            if source_group not in aliases:
-                aliases.insert(0, source_group)
+        # Try each server candidate
+        for server in server_candidates:
+            if members:  # Already got data, stop
+                break
+                
+            diagnostic_details.append(f"Trying server: {server}")
+            
+            for target_group in local_groups:
+                if members:  # Already got data for this host
+                    break
+                    
+                sid = target_group["sid"]
+                source_group = target_group["name"]
+                
+                # Get all possible names for this group
+                aliases = []
+                for nm in LOCAL_GROUP_NAME_ALIASES.get(sid, []):
+                    if nm and nm not in aliases:
+                        aliases.append(nm)
+                if source_group not in aliases:
+                    aliases.insert(0, source_group)
 
-            group_ok = False
-            group_attempt_errors = []
-
-            for server in server_candidates:
-                # First try native RPC with the current process token/context.
-                # In many domains this works, while explicit NetUseAdd can fail with 66/1219.
-                session_ok, session_note = (False, "not attempted")
-                session_tried = False
+                # Try each group alias
                 for group_name in aliases:
                     if members:
                         break
@@ -2203,79 +2167,12 @@ foreach ($groupName in $candidates) {
                                     
                                     if members:
                                         break
-                                if fetched_any:
-                                    break
-                            except Exception as le:
-                                le_text = str(le).lower()
-                                level_errors.append("lvl=" + str(lvl) + ": " + _fmt_exc(le))
-                                # If access is denied, try establishing explicit SMB session once
-                                # and retry same level immediately.
-                                if (("access is denied" in le_text) or ("'5'" in le_text) or ("отказано в доступе" in le_text)) and not session_tried:
-                                    session_tried = True
-                                    session_ok, session_note = _ensure_smb_session(server)
-                                    if not session_ok:
-                                        logger.debug("RPC-SAMR session open failed for %s via %s: %s", computer, server, session_note)
-                                    else:
-                                        try:
-                                            resume = 0
-                                            while True:
-                                                data, total, resume = win32net.NetLocalGroupGetMembers(server, group_name, lvl, resume, 4096)
-                                                fetched_any = True
-                                                for item in data:
-                                                    if lvl == 2:
-                                                        raw_name = item.get("domainandname")
-                                                        sid_usage = int(item.get("sidusage", 0) or 0)
-                                                    elif lvl == 1:
-                                                        raw_name = item.get("name") or item.get("domainandname")
-                                                        sid_usage = int(item.get("sidusage", 0) or 0)
-                                                    else:
-                                                        raw_name = item.get("domainandname") or item.get("name") or item.get("sid")
-                                                        sid_usage = int(item.get("sidusage", 0) or 0)
-
-                                                    domain_and_name = str(raw_name or "").strip()
-                                                    if not domain_and_name:
-                                                        continue
-                                                    if sid_usage in (2, 4, 5):
-                                                        typ = "Group"
-                                                    elif sid_usage in (1, 6, 7):
-                                                        typ = "User"
-                                                    else:
-                                                        typ = "Account"
-                                                    key = (domain_and_name.lower(), typ, source_group)
-                                                    if key in seen:
-                                                        continue
-                                                    seen.add(key)
-                                                    members.append({"name": domain_and_name, "type": typ, "source_group": source_group})
-                                                if not resume:
-                                                    break
-                                        except Exception as le_retry:
-                                            level_errors.append("lvl=" + str(lvl) + "-retry: " + _fmt_exc(le_retry))
-                                if "access is denied" not in le_text and "'5'" not in le_text and "отказано в доступе" not in le_text:
-                                    break
-
-                        if fetched_any:
-                            group_ok = True
-                            break
-
-                        raise RuntimeError("; ".join(level_errors) if level_errors else "no data")
-                    except Exception as e:
-                        detail = (
-                            "server=" + str(server) +
-                            ", group=" + str(group_name) +
-                            ", session=" + ("ok" if session_ok else "fail") +
-                            (", " + session_note if session_note else "") +
-                            ", err=" + _fmt_exc(e)
-                        )
-                        group_attempt_errors.append(detail)
-                        continue
-                if group_ok:
-                    break
-
-            if not group_ok:
-                if group_attempt_errors:
-                    errors.append(source_group + ": " + " || ".join(group_attempt_errors[:3]))
-                else:
-                    errors.append(source_group + ": no successful attempts")
+                                        
+                            # Other errors
+                            else:
+                                diagnostic_details.append(
+                                    f"Error for {group_name} (level {lvl}): {err_text[:100]}"
+                                )
 
         # Cleanup SMB sessions
         if WIN32NETCON_AVAILABLE:
