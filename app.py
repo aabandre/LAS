@@ -132,8 +132,6 @@ def smart_decode(raw_bytes):
 
 PS_ENCODING_PREFIX = r"""
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
 """
 
 
