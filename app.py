@@ -120,7 +120,7 @@ templates = Jinja2Templates(directory=templates_dir)
 def smart_decode(raw_bytes):
     if not raw_bytes:
         return ""
-    for enc in ["utf-8-sig", "utf-8", "cp1251", "cp866"]:
+    for enc in ["utf-8-sig", "utf-8", "utf-16-le", "utf-16-be", "cp1251", "cp866"]:
         try:
             text = raw_bytes.decode(enc)
             if "\ufffd" not in text:
@@ -132,8 +132,6 @@ def smart_decode(raw_bytes):
 
 PS_ENCODING_PREFIX = r"""
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
 """
 
 
@@ -146,17 +144,74 @@ class DNSCache:
         self._cache = {}
         self._lock = threading.Lock()
 
-    def resolve(self, host):
-        with self._lock:
-            if host in self._cache:
-                return self._cache[host]
+    def resolve(self, host, domain_hint=""):
+        host = str(host or "").strip()
+        if not host:
+            return None
+
+        domain_hint = str(domain_hint or "").strip()
+        candidates = []
+        seen = set()
+
+        def _add(candidate):
+            value = str(candidate or "").strip()
+            if not value:
+                return
+            key = value.lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(value)
+
+        _add(host)
+
+        host_short = host.split(".", 1)[0]
+        if host_short and host_short != host:
+            _add(host_short)
+
+        if domain_hint and host_short and "." not in host_short:
+            _add(host_short + "." + domain_hint)
+
+        # Try additional DNS aliases from resolver. Be defensive: some wrapped
+        # runtimes may return non-standard structures.
         try:
-            ip = socket.gethostbyname(host)
-        except socket.error:
-            ip = None
-        with self._lock:
-            self._cache[host] = ip
-        return ip
+            resolved = socket.gethostbyname_ex(host)
+            if isinstance(resolved, (tuple, list)):
+                if len(resolved) >= 1:
+                    _add(resolved[0])
+                if len(resolved) >= 2 and isinstance(resolved[1], (list, tuple)):
+                    for alias in resolved[1]:
+                        _add(alias)
+        except Exception:
+            pass
+
+        # Extra fallback: getaddrinfo often succeeds where gethostbyname_ex is limited.
+        try:
+            info = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            for row in info:
+                if len(row) >= 4:
+                    canonname = row[3]
+                    _add(canonname)
+        except Exception:
+            pass
+
+        for candidate in candidates:
+            with self._lock:
+                if candidate in self._cache:
+                    cached = self._cache[candidate]
+                    if cached:
+                        return cached
+                    continue
+            try:
+                ip = socket.gethostbyname(candidate)
+            except socket.error:
+                ip = None
+            with self._lock:
+                self._cache[candidate] = ip
+                if candidate != host:
+                    self._cache.setdefault(host, ip)
+            if ip:
+                return ip
+        return None
 
     def clear(self):
         with self._lock:
@@ -512,8 +567,7 @@ class Scanner:
             "3389_rdp": p3389,
         }
 
-    @staticmethod
-    def _host_candidates(hostname, ip=None):
+    def _host_candidates(self, hostname, ip=None):
         def _is_ip(value):
             try:
                 ipaddress.ip_address(str(value or '').strip())
@@ -526,8 +580,9 @@ class Scanner:
 
         host = str(hostname or '').strip()
         host_short = host.split('.', 1)[0] if host and not _is_ip(host) else ''
+        domain_hint = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
 
-        for candidate in (host, host_short, ip):
+        for candidate in (host, host_short, (host_short + "." + domain_hint) if (host_short and domain_hint and "." not in host_short) else "", ip):
             val = str(candidate or '').strip()
             key = val.lower()
             if val and key not in seen:
@@ -1205,10 +1260,20 @@ class Scanner:
             if isinstance(item, dict):
                 name = item.get("Name") or item.get("name") or ""
                 obj_type = item.get("Type") or item.get("ObjectClass") or item.get("type") or "unknown"
+                sid = str(item.get("SID") or item.get("Sid") or item.get("sid") or "").strip()
             else:
                 name = str(item)
                 obj_type = "unknown"
+                sid = ""
             name = name.strip()
+            # Constrained/legacy hosts can return mojibake or masked local account names.
+            # If SID identifies RID-500, normalize to a stable built-in Administrator label.
+            if sid.endswith("-500") and ("?" in name or "Ђ" in name or "¤" in name):
+                if "\\" in name:
+                    host_part = name.split("\\", 1)[0].strip() or "LOCALHOST"
+                    name = host_part + "\\Administrator"
+                else:
+                    name = "Administrator"
             if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
                 names.append({"name": name, "type": obj_type})
         return names
@@ -1328,14 +1393,21 @@ $result | ConvertTo-Json -Compress -Depth 3
 
             if group_members is None:
                 try:
+                    group_names = LOCAL_GROUP_NAME_ALIASES.get(sid, [group_name])
+                    ps_names = ", ".join("'" + n.replace("'", "''") + "'" for n in group_names)
                     script = r"""
-$targetSid = "__GROUP_SID__"
-$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
-$group = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
-Get-LocalGroupMember -Group $group |
-    Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}} |
-    ConvertTo-Json -Compress
-""".replace("__GROUP_SID__", sid)
+$candidates = @(__GROUP_CANDIDATES__)
+foreach ($g in $candidates) {
+    try {
+        $items = Get-LocalGroupMember -Group $g -ErrorAction Stop |
+            Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}}, @{N='SID';E={if ($_.SID) { $_.SID.Value } else { '' }}}
+        if ($items) {
+            $items | ConvertTo-Json -Compress
+            return
+        }
+    } catch {}
+}
+""".replace("__GROUP_CANDIDATES__", ps_names)
                     raw = self._run_ps(session, script, computer)
                     members = self._extract_names(raw)
                     if members:
@@ -1346,19 +1418,26 @@ Get-LocalGroupMember -Group $group |
 
             if group_members is None:
                 try:
+                    group_names = LOCAL_GROUP_NAME_ALIASES.get(sid, [group_name])
+                    ps_names = ", ".join("'" + n.replace("'", "''") + "'" for n in group_names)
                     script = r"""
-$targetSid = "__GROUP_SID__"
-$sid = New-Object System.Security.Principal.SecurityIdentifier($targetSid)
-$groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\\')[-1]
-$raw = net localgroup $groupName 2>&1
-$started = $false; $res = @()
-foreach ($line in $raw) {
-    $s = "$line".Trim()
-    if ($s -match '^-{3,}$') { $started = $true; continue }
-    if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
+$candidates = @(__GROUP_CANDIDATES__)
+foreach ($groupName in $candidates) {
+    try {
+        $raw = net localgroup $groupName 2>&1
+        $started = $false; $res = @()
+        foreach ($line in $raw) {
+            $s = "$line".Trim()
+            if ($s -match '^-{3,}$') { $started = $true; continue }
+            if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
+        }
+        if ($res) {
+            $res | ConvertTo-Json -Compress
+            return
+        }
+    } catch {}
 }
-$res | ConvertTo-Json -Compress
-""".replace("__GROUP_SID__", sid)
+""".replace("__GROUP_CANDIDATES__", ps_names)
                     raw = self._run_ps(session, script, computer)
                     members = self._extract_names(raw)
                     if members:
@@ -1960,13 +2039,13 @@ $res | ConvertTo-Json -Compress
             elif "@" in user_base:
                 base_short = user_base.split("@", 1)[0].strip() or user_base
 
-            candidates.append(user_base)
             if netbios and base_short:
                 candidates.append(netbios + "\\" + base_short)
-            if domain and base_short:
-                candidates.append(base_short + "@" + domain)
             if base_short:
                 candidates.append(base_short)
+            candidates.append(user_base)
+            if domain and base_short:
+                candidates.append(base_short + "@" + domain)
 
             uniq = []
             seen = set()
@@ -1990,7 +2069,9 @@ $res | ConvertTo-Json -Compress
                     "remote": ipc_remote,
                     "password": password,
                     "username": smb_user,
-                    "asg_type": getattr(win32netcon, "USE_WILDCARD", 0),
+                    # USE_WILDCARD can trigger NetUseAdd(66) in some environments.
+                    # 0 lets the API auto-detect the correct remote resource type.
+                    "asg_type": 0,
                 }
                 try:
                     win32net.NetUseAdd(None, 2, ui2)
@@ -2210,7 +2291,8 @@ $res | ConvertTo-Json -Compress
             if self.cancelled:
                 raise RuntimeError("Cancelled")
 
-            ip = dns_cache.resolve(computer)
+            domain_hint = str((self.config.get("ad_config") or {}).get("domain") or "").strip()
+            ip = dns_cache.resolve(computer, domain_hint=domain_hint)
             result["ip"] = ip
 
             sem = getattr(self, "net_semaphore", None)
