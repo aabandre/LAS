@@ -3152,6 +3152,37 @@ async def api_metrics():
     return metrics.get_stats()
 
 
+@app.post("/api/remediate/remove-local-admin")
+async def api_remove_local_admin(request: Request):
+    body = await request.json()
+    machine = str(body.get("machine") or "").strip()
+    account = str(body.get("account") or "").strip()
+    group = str(body.get("group") or "Administrators").strip() or "Administrators"
+    use_ssl = bool(body.get("use_ssl", False))
+    dry_run = bool(body.get("dry_run", False))
+    if not machine or not account:
+        return JSONResponse({"error": "machine and account are required"}, status_code=400)
+
+    script = (
+        "$g='" + group.replace("'", "''") + "';$m='" + account.replace("'", "''") + "';"
+        "if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "Remove-LocalGroupMember -Group $g -Member $m -ErrorAction Stop"
+        "}else{"
+        "$adsi=[ADSI]('WinNT://./'+$g+',group');"
+        "$adsi.Remove('WinNT://'+$m.Replace('\\\\','/'))"
+        "};"
+        "$o=@{ok=$true;machine=$env:COMPUTERNAME;account=$m;group=$g};$o|ConvertTo-Json -Compress"
+    )
+    if dry_run:
+        return {"ok": True, "machine": machine, "account": account, "group": group, "dry_run": True}
+    try:
+        session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+        result = scanner._run_ps(session, script, machine)
+        return {"ok": True, "result": result, "machine": machine, "account": account, "group": group}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), "machine": machine, "account": account}, status_code=500)
+
+
 @app.get("/api/results/filter")
 async def api_filter_results(
     severity: str = Query(None),

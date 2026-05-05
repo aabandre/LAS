@@ -98,6 +98,12 @@
         .machine-filter{margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
         .machine-filter select,.machine-filter input{padding:4px 8px;font-size:12px;border:1px solid #ccc;border-radius:3px}
         .machine-detail{margin-top:10px;border:1px solid #e1e7f0;border-radius:4px;background:#fafcff;padding:10px}
+        .rem-box{margin-top:10px;border:1px solid #ffd8d8;background:#fff7f7;border-radius:6px;padding:10px}
+        .rem-box h4{margin:0 0 6px;font-size:13px;color:#a94442}
+        .rem-item{font-size:11px;padding:4px 0;border-bottom:1px dashed #f0caca}
+        .rem-item:last-child{border-bottom:none}
+        .mini-danger{padding:3px 8px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px}
+        .mini-danger:hover{background:#c0392b}
         .machine-detail h4{margin:0 0 8px;font-size:13px}
         .machine-group-block{margin:8px 0}
         .machine-group-block b{color:#2d5f9f}
@@ -219,7 +225,7 @@
                             <th onclick="sortTbl('adminTable',2)" data-i18n="col_type">Type</th>
                             <th onclick="sortTbl('adminTable',3)" data-i18n="col_count">Count</th>
                             <th onclick="sortTbl('adminTable',4)" data-i18n="col_via">Via Group</th>
-                            <th data-i18n="col_machines">Machines</th>
+                            <th data-i18n="col_machines">Machines</th><th>Actions</th>
                         </tr></thead>
                         <tbody id="adminBody"></tbody>
                     </table>
@@ -242,6 +248,15 @@
                     </div>
                 </div>
                 <div class="machine-detail" id="machineDetailBox"></div>
+                <div class="rem-box">
+                    <h4>Remediation queue</h4>
+                    <div id="remQueue"></div>
+                    <div style="margin-top:8px">
+                        <button class="mini-danger" onclick="runRemediationQueue()">Run now</button>
+                        <button class="mini-danger" onclick="exportRemediationScript()">Export .ps1</button>
+                        <button class="mini-danger" onclick="clearRemediationQueue()">Clear</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -399,6 +414,7 @@ var SD=null,COLORS=["#4a90d9","#5cb85c","#d9534f","#f0ad4e","#9b59b6","#1abc9c",
 var sortDirs={};
 var adminCurrentPage=1;
 var riskSeverityFilter="all";
+var remediationQueue=[];
 function $(id){return document.getElementById(id)}
 function val(id){return $(id)?$(id).value:""}
 function getJSON(u,cb){var x=new XMLHttpRequest();x.open("GET",u,true);x.onreadystatechange=function(){if(x.readyState===4){var r=null;try{r=JSON.parse(x.responseText)}catch(e){}cb(x.status,r)}};x.send()}
@@ -617,7 +633,8 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
             +"<td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
-            +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td></tr>"}
+            +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td>"
+            +"<td><button class=\"mini-danger\" onclick=\"queueAdminForRemoval('"+(a.account||"").replace(/'/g,"\\'")+"')\">Queue</button></td></tr>"}
     $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;adminCurrentPage=1;filterAdmins()}
 
 function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false,oLG=$("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false;
@@ -703,6 +720,60 @@ function renderMachineDetails(){
         h+='</div></div>';
     }
     box.innerHTML=h;
+}
+function queueAdminForRemoval(account){
+    var rows=$("adminBody").getElementsByTagName("tr"),i;
+    for(i=0;i<rows.length;i++){
+        var tds=rows[i].getElementsByTagName("td"); if(!tds||tds.length<6)continue;
+        var acct=(tds[1].innerText||"").split("\n")[0].trim();
+        if(acct!==account)continue;
+        var machines=splitList((tds[5].innerText||"").replace(/\s+/g," ").replace(/ hosts?.*/,""));
+        for(var j=0;j<machines.length;j++){
+            remediationQueue.push({machine:machines[j],account:account,group:"Administrators"});
+        }
+        break;
+    }
+    renderRemediationQueue();
+}
+function renderRemediationQueue(){
+    var box=$("remQueue");if(!box)return;
+    if(!remediationQueue.length){box.innerHTML='<div style="font-size:11px;color:#888">Queue is empty</div>';return}
+    var uniq={},arr=[],i,k,h="";
+    for(i=0;i<remediationQueue.length;i++){k=remediationQueue[i].machine+"|"+remediationQueue[i].account;if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
+    remediationQueue=arr;
+    for(i=0;i<arr.length;i++)h+='<div class="rem-item"><b>'+escapeHtml(arr[i].machine)+'</b> → '+escapeHtml(arr[i].account)+'</div>';
+    box.innerHTML=h;
+}
+function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
+function exportRemediationScript(){
+    if(!remediationQueue.length){alert("Queue is empty");return;}
+    var lines=['# Generated remediation script','Set-StrictMode -Version Latest'];
+    for(var i=0;i<remediationQueue.length;i++){
+        var r=remediationQueue[i];
+        lines.push('Try { Remove-LocalGroupMember -Group "'+r.group+'" -Member "'+r.account.replace(/"/g,'`"')+'" -ComputerName "'+r.machine.replace(/"/g,'`"')+'" -ErrorAction Stop; Write-Host "OK '+r.machine+' '+r.account+'" } Catch { Write-Warning "Failed '+r.machine+' '+r.account+': $($_.Exception.Message)" }');
+    }
+    var blob=new Blob([lines.join('\n')],{type:'text/plain;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download="remediate_local_admins_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";document.body.appendChild(a);a.click();
+    setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
+}
+function runRemediationQueue(){
+    if(!remediationQueue.length){alert("Queue is empty");return;}
+    if(!confirm("Run removal now on "+remediationQueue.length+" entries?"))return;
+    var i=0,ok=0,fail=0;
+    function step(){
+        if(i>=remediationQueue.length){alert("Done. OK: "+ok+", Failed: "+fail);return;}
+        var r=remediationQueue[i++];
+        var x=new XMLHttpRequest();
+        x.open("POST","/api/remediate/remove-local-admin",true);
+        x.setRequestHeader("Content-Type","application/json");
+        x.onreadystatechange=function(){
+            if(x.readyState!==4)return;
+            if(x.status===200)ok++;else fail++;
+            step();
+        };
+        x.send(JSON.stringify({machine:r.machine,account:r.account,group:r.group}));
+    }
+    step();
 }
 function renderRisky(){var machines=SD.risky_machines||[],details=SD.risky_details||{},risks=SD.machine_risks||{};$("riskyCount").innerHTML=machines.length;
     if(!machines.length){$("riskyGrid").innerHTML="<div style=\"padding:20px;color:#5cb85c;font-weight:bold\">"+t("all_clean")+"</div>";return}
