@@ -268,10 +268,39 @@ class Metrics:
 metrics = Metrics()
 
 
-def calc_risk_score(members, allowed_admins=None):
+def _build_allowed_principal_set(allowed_admins, domain_aliases=None):
+    allowed_admins = allowed_admins or []
+    domain_aliases = domain_aliases or []
+    alias_set = set()
+    for alias in domain_aliases:
+        a = str(alias or "").strip().lower()
+        if a:
+            alias_set.add(a)
+
+    normalized = set()
+    for raw in allowed_admins:
+        item = str(raw or "").strip().lower()
+        if not item:
+            continue
+        normalized.add(item)
+        short = item.split("\\")[-1] if "\\" in item else item
+        normalized.add(short)
+        if "\\" in item:
+            dom, principal = item.split("\\", 1)
+            dom = dom.strip().lower()
+            principal = principal.strip().lower()
+            if principal:
+                normalized.add(principal)
+            if dom and principal and alias_set:
+                for alias in alias_set:
+                    normalized.add(alias + "\\" + principal)
+    return normalized
+
+
+def calc_risk_score(members, allowed_admins=None, domain_aliases=None):
     if allowed_admins is None:
         allowed_admins = set()
-    allowed_lower = set(a.lower() for a in allowed_admins)
+    allowed_lower = _build_allowed_principal_set(allowed_admins, domain_aliases)
 
     score = 0
     reasons = []
@@ -2324,7 +2353,11 @@ foreach ($groupName in $candidates) {
 
             result["members"] = classified
             self._add_members(len(classified))
-            result["risk"] = calc_risk_score(classified, set(self.config.get("allowed_admins", [])))
+            result["risk"] = calc_risk_score(
+                classified,
+                set(self.config.get("allowed_admins", [])),
+                self.config.get("domain_aliases", []),
+            )
 
         except Exception as e:
             if str(e) != "Cancelled":
@@ -3117,6 +3150,53 @@ async def api_diff(
 @app.get("/api/metrics")
 async def api_metrics():
     return metrics.get_stats()
+
+
+@app.post("/api/remediate/remove-local-admin")
+async def api_remove_local_admin(request: Request):
+    body = await request.json()
+    machine = str(body.get("machine") or "").strip()
+    account = str(body.get("account") or "").strip()
+    group = str(body.get("group") or "Administrators").strip() or "Administrators"
+    use_ssl = bool(body.get("use_ssl", False))
+    dry_run = bool(body.get("dry_run", False))
+    auth_user = str(body.get("username") or "").strip()
+    auth_pass = str(body.get("password") or "")
+    auth_domain = str(body.get("domain") or "").strip()
+    if not machine or not account:
+        return JSONResponse({"error": "machine and account are required"}, status_code=400)
+
+    script = (
+        "$g='" + group.replace("'", "''") + "';$m='" + account.replace("'", "''") + "';"
+        "if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "Remove-LocalGroupMember -Group $g -Member $m -ErrorAction Stop"
+        "}else{"
+        "$adsi=[ADSI]('WinNT://./'+$g+',group');"
+        "$adsi.Remove('WinNT://'+$m.Replace('\\\\','/'))"
+        "};"
+        "$o=@{ok=$true;machine=$env:COMPUTERNAME;account=$m;group=$g};$o|ConvertTo-Json -Compress"
+    )
+    if dry_run:
+        return {"ok": True, "machine": machine, "account": account, "group": group, "dry_run": True}
+    try:
+        if auth_user and auth_pass:
+            username = auth_user
+            if auth_domain and ("\\" not in username and "@" not in username):
+                username = auth_domain + "\\" + username
+            port = 5986 if use_ssl else 5985
+            scheme = "https" if use_ssl else "http"
+            target = scheme + "://" + machine + ":" + str(port)
+            session = winrm.Session(
+                target=target, auth=(username, auth_pass),
+                transport="ntlm", server_cert_validation="ignore",
+                read_timeout_sec=30, operation_timeout_sec=25,
+            )
+        else:
+            session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+        result = scanner._run_ps(session, script, machine)
+        return {"ok": True, "result": result, "machine": machine, "account": account, "group": group}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), "machine": machine, "account": account}, status_code=500)
 
 
 @app.get("/api/results/filter")
