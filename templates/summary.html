@@ -220,11 +220,12 @@
                 <div class="admin-table-wrap">
                     <table id="adminTable">
                         <thead><tr>
-                            <th onclick="sortTbl('adminTable',0)">#</th>
-                            <th onclick="sortTbl('adminTable',1)" data-i18n="col_account">Account</th>
-                            <th onclick="sortTbl('adminTable',2)" data-i18n="col_type">Type</th>
-                            <th onclick="sortTbl('adminTable',3)" data-i18n="col_count">Count</th>
-                            <th onclick="sortTbl('adminTable',4)" data-i18n="col_via">Via Group</th>
+                            <th><input type="checkbox" id="adminSelectAll" onchange="toggleSelectAllAdmins(this.checked)"></th>
+                            <th onclick="sortTbl('adminTable',1)">#</th>
+                            <th onclick="sortTbl('adminTable',2)" data-i18n="col_account">Account</th>
+                            <th onclick="sortTbl('adminTable',3)" data-i18n="col_type">Type</th>
+                            <th onclick="sortTbl('adminTable',4)" data-i18n="col_count">Count</th>
+                            <th onclick="sortTbl('adminTable',5)" data-i18n="col_via">Via Group</th>
                             <th data-i18n="col_machines">Machines</th><th>Actions</th>
                         </tr></thead>
                         <tbody id="adminBody"></tbody>
@@ -243,6 +244,7 @@
                             <option value="1000">1000</option>
                             <option value="2000">2000</option>
                         </select>
+                        <button onclick="queueSelectedAdmins()" class="mini-danger">Queue selected</button>
                         <button onclick="changeAdminPage(-1)" id="adminPrevBtn" data-i18n="pager_prev">Prev</button>
                         <button onclick="changeAdminPage(1)" id="adminNextBtn" data-i18n="pager_next">Next</button>
                     </div>
@@ -630,8 +632,8 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         var accountSafe=escapeHtml(a.account||"");
         var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",machineArr=(a.machines||[]),mList=machineArr.join(", ");
         var viaView=renderExpandableText(via,"groups"),machinesView=renderExpandableList(machineArr,"host","hosts");
-        html+="<tr data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
-            +"<td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
+        html+="<tr data-account=\""+accountSafe.replace(/"/g,"&quot;")+"\" data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-machines-raw=\""+escapeHtml(machineArr.join("|")).replace(/"/g,"&quot;")+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
+            +"<td><input type=\"checkbox\" class=\"admin-row-chk\"></td><td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
             +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td>"
             +"<td><button class=\"mini-danger\" onclick=\"queueAdminForRemoval('"+(a.account||"").replace(/'/g,"\\'")+"')\">Queue</button></td></tr>"}
@@ -724,16 +726,36 @@ function renderMachineDetails(){
 function queueAdminForRemoval(account){
     var rows=$("adminBody").getElementsByTagName("tr"),i;
     for(i=0;i<rows.length;i++){
-        var tds=rows[i].getElementsByTagName("td"); if(!tds||tds.length<6)continue;
-        var acct=(tds[1].innerText||"").split("\n")[0].trim();
+        var tds=rows[i].getElementsByTagName("td"); if(!tds||tds.length<7)continue;
+        var acct=rows[i].getAttribute("data-account")||"";
         if(acct!==account)continue;
-        var machines=splitList((tds[5].innerText||"").replace(/\s+/g," ").replace(/ hosts?.*/,""));
+        var machinesRaw=(rows[i].getAttribute("data-machines-raw")||"").split("|"),machines=[];
+        for(var mi=0;mi<machinesRaw.length;mi++){if(machinesRaw[mi])machines.push(machinesRaw[mi]);}
         for(var j=0;j<machines.length;j++){
             remediationQueue.push({machine:machines[j],account:account,group:"Administrators"});
         }
         break;
     }
     renderRemediationQueue();
+}
+function queueSelectedAdmins(){
+    var rows=$("adminBody").getElementsByTagName("tr"),added=0;
+    for(var i=0;i<rows.length;i++){
+        if(rows[i].style.display==="none")continue;
+        var chk=rows[i].querySelector(".admin-row-chk"); if(!chk||!chk.checked)continue;
+        var account=rows[i].getAttribute("data-account")||"";
+        var machinesRaw=(rows[i].getAttribute("data-machines-raw")||"").split("|");
+        for(var j=0;j<machinesRaw.length;j++){if(machinesRaw[j]){remediationQueue.push({machine:machinesRaw[j],account:account,group:"Administrators"});added++;}}
+    }
+    renderRemediationQueue();
+    if(!added)alert("Nothing selected");
+}
+function toggleSelectAllAdmins(state){
+    var rows=$("adminBody").getElementsByTagName("tr");
+    for(var i=0;i<rows.length;i++){
+        if(rows[i].style.display==="none")continue;
+        var chk=rows[i].querySelector(".admin-row-chk");if(chk)chk.checked=!!state;
+    }
 }
 function renderRemediationQueue(){
     var box=$("remQueue");if(!box)return;
