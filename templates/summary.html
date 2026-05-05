@@ -252,6 +252,11 @@
                 <div class="machine-detail" id="machineDetailBox"></div>
                 <div class="rem-box">
                     <h4 data-i18n="rem_queue_title">Remediation queue</h4>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">
+                        <input id="remDomain" placeholder="DOMAIN" style="padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:11px;width:120px">
+                        <input id="remUser" placeholder="User" style="padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:11px;width:140px">
+                        <input id="remPass" type="password" placeholder="Password (optional)" style="padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:11px;width:180px">
+                    </div>
                     <div id="remQueue"></div>
                     <div style="margin-top:8px">
                         <button class="mini-danger" onclick="runRemediationQueue()" data-i18n="rem_run_now">Run now</button>
@@ -773,13 +778,20 @@ function renderRemediationQueue(){
 function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
 function exportRemediationScript(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
-    var lines=['# Generated remediation script','Set-StrictMode -Version Latest'];
+    var lines=['# Generated remediation script v2 (ADSI remote mode)','Set-StrictMode -Version Latest','$ErrorActionPreference = "Stop"'];
     for(var i=0;i<remediationQueue.length;i++){
         var r=remediationQueue[i];
         var m=r.machine.replace(/"/g,'`"'),g=r.group.replace(/"/g,'`"'),a=r.account.replace(/"/g,'`"');
         lines.push('Try {');
-        lines.push('  $grp=[ADSI]("WinNT://'+m+'/'+g+',group")');
-        lines.push('  $grp.Remove("WinNT://'+a.replace(/\\\\/g,'/')+'")');
+        lines.push('  Invoke-Command -ComputerName "'+m+'" -ScriptBlock {');
+        lines.push('    param($grp,$mem)');
+        lines.push('    if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){');
+        lines.push('      Remove-LocalGroupMember -Group $grp -Member $mem -ErrorAction Stop; return');
+        lines.push('    }');
+        lines.push('    $adsi=[ADSI]("WinNT://./"+$grp+",group")');
+        lines.push('    try {$adsi.Remove("WinNT://"+$mem.Replace("\\\\","/")); return} catch {}');
+        lines.push('    $short=$mem.Split("\\\\")[-1]; $adsi.Remove("WinNT://"+$short)');
+        lines.push('  } -ArgumentList "'+g+'","'+a+'" -ErrorAction Stop');
         lines.push('  Write-Host "OK '+m+' '+a+'"');
         lines.push('} Catch {');
         lines.push('  Write-Warning "Failed '+m+' '+a+': $($_.Exception.Message)"');
@@ -804,7 +816,10 @@ function runRemediationQueue(){
             if(x.status===200)ok++;else{fail++;try{var er=JSON.parse(x.responseText||"{}");errs.push((r.machine+" "+r.account+": "+(er.error||x.statusText||x.status)));}catch(e){errs.push(r.machine+" "+r.account+": "+x.status);}}
             step();
         };
-        x.send(JSON.stringify({machine:r.machine,account:r.account,group:r.group}));
+        x.send(JSON.stringify({
+            machine:r.machine,account:r.account,group:r.group,
+            domain:val("remDomain"),username:val("remUser"),password:val("remPass")
+        }));
     }
     step();
 }

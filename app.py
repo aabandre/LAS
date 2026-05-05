@@ -3160,6 +3160,9 @@ async def api_remove_local_admin(request: Request):
     group = str(body.get("group") or "Administrators").strip() or "Administrators"
     use_ssl = bool(body.get("use_ssl", False))
     dry_run = bool(body.get("dry_run", False))
+    auth_user = str(body.get("username") or "").strip()
+    auth_pass = str(body.get("password") or "")
+    auth_domain = str(body.get("domain") or "").strip()
     if not machine or not account:
         return JSONResponse({"error": "machine and account are required"}, status_code=400)
 
@@ -3176,7 +3179,20 @@ async def api_remove_local_admin(request: Request):
     if dry_run:
         return {"ok": True, "machine": machine, "account": account, "group": group, "dry_run": True}
     try:
-        session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+        if auth_user and auth_pass:
+            username = auth_user
+            if auth_domain and ("\\" not in username and "@" not in username):
+                username = auth_domain + "\\" + username
+            port = 5986 if use_ssl else 5985
+            scheme = "https" if use_ssl else "http"
+            target = scheme + "://" + machine + ":" + str(port)
+            session = winrm.Session(
+                target=target, auth=(username, auth_pass),
+                transport="ntlm", server_cert_validation="ignore",
+                read_timeout_sec=30, operation_timeout_sec=25,
+            )
+        else:
+            session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
         result = scanner._run_ps(session, script, machine)
         return {"ok": True, "result": result, "machine": machine, "account": account, "group": group}
     except Exception as e:
