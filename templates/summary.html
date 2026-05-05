@@ -226,7 +226,7 @@
                             <th onclick="sortTbl('adminTable',3)" data-i18n="col_type">Type</th>
                             <th onclick="sortTbl('adminTable',4)" data-i18n="col_count">Count</th>
                             <th onclick="sortTbl('adminTable',5)" data-i18n="col_via">Via Group</th>
-                            <th data-i18n="col_machines">Machines</th><th>Actions</th>
+                            <th data-i18n="col_machines">Machines</th><th data-i18n="col_actions">Actions</th>
                         </tr></thead>
                         <tbody id="adminBody"></tbody>
                     </table>
@@ -251,12 +251,12 @@
                 </div>
                 <div class="machine-detail" id="machineDetailBox"></div>
                 <div class="rem-box">
-                    <h4>Remediation queue</h4>
+                    <h4 data-i18n="rem_queue_title">Remediation queue</h4>
                     <div id="remQueue"></div>
                     <div style="margin-top:8px">
-                        <button class="mini-danger" onclick="runRemediationQueue()">Run now</button>
-                        <button class="mini-danger" onclick="exportRemediationScript()">Export .ps1</button>
-                        <button class="mini-danger" onclick="clearRemediationQueue()">Clear</button>
+                        <button class="mini-danger" onclick="runRemediationQueue()" data-i18n="rem_run_now">Run now</button>
+                        <button class="mini-danger" onclick="exportRemediationScript()" data-i18n="rem_export">Export .ps1</button>
+                        <button class="mini-danger" onclick="clearRemediationQueue()" data-i18n="rem_clear">Clear</button>
                     </div>
                 </div>
             </div>
@@ -340,7 +340,9 @@ en:{
     diff_added:"Added",diff_removed:"Removed",diff_new:"New",
     dl_download:"Download",dl_load:"Load",rebuilt_msg:"Rebuilt! Accounts: ",s_top_errors:"Top hosts with errors",
     kpi_total_hosts:"Total hosts",kpi_success_rate:"Success rate",kpi_risky_hosts:"Risky hosts",kpi_unique_admins:"Unique admins",
-    w_overview:"Overview",w_risk_focus:"Risk focus",w_perf:"Performance",w_data:"Data quality"
+    w_overview:"Overview",w_risk_focus:"Risk focus",w_perf:"Performance",w_data:"Data quality",
+    col_actions:"Actions",rem_queue_title:"Remediation queue",rem_run_now:"Run now",rem_export:"Export .ps1",rem_clear:"Clear",
+    rem_empty:"Queue is empty",rem_nothing_selected:"Nothing selected",rem_confirm:"Run removal now on",rem_done:"Done"
 },
 ru:{
     s_back:"\u2190 \u041d\u0430\u0437\u0430\u0434 \u043a \u0441\u043a\u0430\u043d\u0435\u0440\u0443",
@@ -387,7 +389,9 @@ ru:{
     dl_download:"\u0421\u043a\u0430\u0447\u0430\u0442\u044c",dl_load:"\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c",
     rebuilt_msg:"\u041f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u043d\u043e! \u0423\u0447\u0451\u0442\u043e\u043a: ",s_top_errors:"\u0422\u043e\u043f \u0445\u043e\u0441\u0442\u043e\u0432 \u0441 \u043e\u0448\u0438\u0431\u043a\u0430\u043c\u0438",
     kpi_total_hosts:"\u0412\u0441\u0435\u0433\u043e \u0445\u043e\u0441\u0442\u043e\u0432",kpi_success_rate:"\u0423\u0441\u043f\u0435\u0448\u043d\u044b\u0445, %",kpi_risky_hosts:"\u0420\u0438\u0441\u043a\u043e\u0432\u044b\u0435 \u0445\u043e\u0441\u0442\u044b",kpi_unique_admins:"\u0423\u043d\u0438\u043a. \u0430\u0434\u043c\u0438\u043d\u044b",
-    w_overview:"\u041e\u0431\u0437\u043e\u0440",w_risk_focus:"\u0424\u043e\u043a\u0443\u0441 \u043d\u0430 \u0440\u0438\u0441\u043a\u0430\u0445",w_perf:"\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0438\u0442.",w_data:"\u041a\u0430\u0447\u0435\u0441\u0442\u0432\u043e \u0434\u0430\u043d\u043d\u044b\u0445"
+    w_overview:"\u041e\u0431\u0437\u043e\u0440",w_risk_focus:"\u0424\u043e\u043a\u0443\u0441 \u043d\u0430 \u0440\u0438\u0441\u043a\u0430\u0445",w_perf:"\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0438\u0442.",w_data:"\u041a\u0430\u0447\u0435\u0441\u0442\u0432\u043e \u0434\u0430\u043d\u043d\u044b\u0445",
+    col_actions:"\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f",rem_queue_title:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u0438\u0441\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",rem_run_now:"\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c",rem_export:"\u042d\u043a\u0441\u043f\u043e\u0440\u0442 .ps1",rem_clear:"\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c",
+    rem_empty:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u0443\u0441\u0442\u0430",rem_nothing_selected:"\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043e",rem_confirm:"\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0434\u043b\u044f",rem_done:"\u0413\u043e\u0442\u043e\u0432\u043e"
 }};
 
 var currentLang="en";
@@ -632,7 +636,7 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
         var accountSafe=escapeHtml(a.account||"");
         var isDomain=isDomainAccountForRow(a.account||"",a.machines||[]),tag="<span class=\"tag "+tagC+"\">"+tagT+"</span>",machineArr=(a.machines||[]),mList=machineArr.join(", ");
         var viaView=renderExpandableText(via,"groups"),machinesView=renderExpandableList(machineArr,"host","hosts");
-        html+="<tr data-account=\""+accountSafe.replace(/"/g,"&quot;")+"\" data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-machines-raw=\""+escapeHtml(machineArr.join("|")).replace(/"/g,"&quot;")+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
+        html+="<tr data-account=\""+accountSafe.replace(/"/g,"&quot;")+"\" data-search=\""+lower+" "+via.toLowerCase()+"\" data-machines=\""+mList.toLowerCase()+"\" data-machines-raw=\""+encodeURIComponent(machineArr.join("|"))+"\" data-is-la=\""+(isLAd?"1":"0")+"\" data-is-bi=\""+(isBI?"1":"0")+"\" data-is-custom=\""+(!isBI&&!isLAd&&!isGrp?"1":"0")+"\" data-has-via=\""+(hasVia?"1":"0")+"\" data-is-group=\""+(isGrp?"1":"0")+"\" data-is-domain=\""+(isDomain?"1":"0")+"\">"
             +"<td><input type=\"checkbox\" class=\"admin-row-chk\"></td><td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
             +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td>"
@@ -729,7 +733,7 @@ function queueAdminForRemoval(account){
         var tds=rows[i].getElementsByTagName("td"); if(!tds||tds.length<7)continue;
         var acct=rows[i].getAttribute("data-account")||"";
         if(acct!==account)continue;
-        var machinesRaw=(rows[i].getAttribute("data-machines-raw")||"").split("|"),machines=[];
+        var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|"),machines=[];
         for(var mi=0;mi<machinesRaw.length;mi++){if(machinesRaw[mi])machines.push(machinesRaw[mi]);}
         for(var j=0;j<machines.length;j++){
             remediationQueue.push({machine:machines[j],account:account,group:"Administrators"});
@@ -744,11 +748,11 @@ function queueSelectedAdmins(){
         if(rows[i].style.display==="none")continue;
         var chk=rows[i].querySelector(".admin-row-chk"); if(!chk||!chk.checked)continue;
         var account=rows[i].getAttribute("data-account")||"";
-        var machinesRaw=(rows[i].getAttribute("data-machines-raw")||"").split("|");
+        var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|");
         for(var j=0;j<machinesRaw.length;j++){if(machinesRaw[j]){remediationQueue.push({machine:machinesRaw[j],account:account,group:"Administrators"});added++;}}
     }
     renderRemediationQueue();
-    if(!added)alert("Nothing selected");
+    if(!added)alert(t("rem_nothing_selected"));
 }
 function toggleSelectAllAdmins(state){
     var rows=$("adminBody").getElementsByTagName("tr");
@@ -759,7 +763,7 @@ function toggleSelectAllAdmins(state){
 }
 function renderRemediationQueue(){
     var box=$("remQueue");if(!box)return;
-    if(!remediationQueue.length){box.innerHTML='<div style="font-size:11px;color:#888">Queue is empty</div>';return}
+    if(!remediationQueue.length){box.innerHTML='<div style="font-size:11px;color:#888">'+t("rem_empty")+'</div>';return}
     var uniq={},arr=[],i,k,h="";
     for(i=0;i<remediationQueue.length;i++){k=remediationQueue[i].machine+"|"+remediationQueue[i].account;if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
     remediationQueue=arr;
@@ -768,29 +772,36 @@ function renderRemediationQueue(){
 }
 function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
 function exportRemediationScript(){
-    if(!remediationQueue.length){alert("Queue is empty");return;}
+    if(!remediationQueue.length){alert(t("rem_empty"));return;}
     var lines=['# Generated remediation script','Set-StrictMode -Version Latest'];
     for(var i=0;i<remediationQueue.length;i++){
         var r=remediationQueue[i];
-        lines.push('Try { Remove-LocalGroupMember -Group "'+r.group+'" -Member "'+r.account.replace(/"/g,'`"')+'" -ComputerName "'+r.machine.replace(/"/g,'`"')+'" -ErrorAction Stop; Write-Host "OK '+r.machine+' '+r.account+'" } Catch { Write-Warning "Failed '+r.machine+' '+r.account+': $($_.Exception.Message)" }');
+        var m=r.machine.replace(/"/g,'`"'),g=r.group.replace(/"/g,'`"'),a=r.account.replace(/"/g,'`"');
+        lines.push('Try {');
+        lines.push('  $grp=[ADSI]("WinNT://'+m+'/'+g+',group")');
+        lines.push('  $grp.Remove("WinNT://'+a.replace(/\\\\/g,'/')+'")');
+        lines.push('  Write-Host "OK '+m+' '+a+'"');
+        lines.push('} Catch {');
+        lines.push('  Write-Warning "Failed '+m+' '+a+': $($_.Exception.Message)"');
+        lines.push('}');
     }
     var blob=new Blob([lines.join('\n')],{type:'text/plain;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement("a");
     a.href=url;a.download="remediate_local_admins_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";document.body.appendChild(a);a.click();
     setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
 }
 function runRemediationQueue(){
-    if(!remediationQueue.length){alert("Queue is empty");return;}
-    if(!confirm("Run removal now on "+remediationQueue.length+" entries?"))return;
-    var i=0,ok=0,fail=0;
+    if(!remediationQueue.length){alert(t("rem_empty"));return;}
+    if(!confirm(t("rem_confirm")+" "+remediationQueue.length+"?"))return;
+    var i=0,ok=0,fail=0,errs=[];
     function step(){
-        if(i>=remediationQueue.length){alert("Done. OK: "+ok+", Failed: "+fail);return;}
+        if(i>=remediationQueue.length){alert(t("rem_done")+". OK: "+ok+", Failed: "+fail+(errs.length?("\n"+errs.slice(0,5).join("\n")):""));return;}
         var r=remediationQueue[i++];
         var x=new XMLHttpRequest();
         x.open("POST","/api/remediate/remove-local-admin",true);
         x.setRequestHeader("Content-Type","application/json");
         x.onreadystatechange=function(){
             if(x.readyState!==4)return;
-            if(x.status===200)ok++;else fail++;
+            if(x.status===200)ok++;else{fail++;try{var er=JSON.parse(x.responseText||"{}");errs.push((r.machine+" "+r.account+": "+(er.error||x.statusText||x.status)));}catch(e){errs.push(r.machine+" "+r.account+": "+x.status);}}
             step();
         };
         x.send(JSON.stringify({machine:r.machine,account:r.account,group:r.group}));
