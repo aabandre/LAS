@@ -210,10 +210,10 @@
                 <div class="admin-controls">
                     <div class="admin-kpis" id="adminKpis"></div>
                     <div class="view-options">
-                        <label for="adminDensity">View:</label>
+                        <label for="adminDensity" data-i18n="view_label">View:</label>
                         <select id="adminDensity" onchange="changeAdminDensity()">
-                            <option value="compact">Compact</option>
-                            <option value="comfortable">Comfortable</option>
+                            <option value="compact" data-i18n="view_compact">Compact</option>
+                            <option value="comfortable" data-i18n="view_comfortable">Comfortable</option>
                         </select>
                     </div>
                 </div>
@@ -244,7 +244,7 @@
                             <option value="1000">1000</option>
                             <option value="2000">2000</option>
                         </select>
-                        <button onclick="queueSelectedAdmins()" class="mini-danger">Queue selected</button>
+                        <button onclick="queueSelectedAdmins()" class="mini-danger" data-i18n="queue_selected">Queue selected</button>
                         <button onclick="changeAdminPage(-1)" id="adminPrevBtn" data-i18n="pager_prev">Prev</button>
                         <button onclick="changeAdminPage(1)" id="adminNextBtn" data-i18n="pager_next">Next</button>
                     </div>
@@ -271,11 +271,11 @@
             <div class="tbl-wrap">
                 <h3><span data-i18n="risk_title">Risky Machines</span> (<span id="riskyCount">0</span>)</h3>
                 <div class="quick-tools" id="riskQuickTools">
-                    <button onclick="setRiskSeverityFilter('all')" class="active" id="riskBtnAll">All</button>
-                    <button onclick="setRiskSeverityFilter('critical')" id="riskBtnCritical">Critical</button>
-                    <button onclick="setRiskSeverityFilter('high')" id="riskBtnHigh">High</button>
-                    <button onclick="setRiskSeverityFilter('medium')" id="riskBtnMedium">Medium</button>
-                    <button onclick="setRiskSeverityFilter('low')" id="riskBtnLow">Low</button>
+                    <button onclick="setRiskSeverityFilter('all')" class="active" id="riskBtnAll" data-i18n="sev_all">All</button>
+                    <button onclick="setRiskSeverityFilter('critical')" id="riskBtnCritical" data-i18n="sev_critical">Critical</button>
+                    <button onclick="setRiskSeverityFilter('high')" id="riskBtnHigh" data-i18n="sev_high">High</button>
+                    <button onclick="setRiskSeverityFilter('medium')" id="riskBtnMedium" data-i18n="sev_medium">Medium</button>
+                    <button onclick="setRiskSeverityFilter('low')" id="riskBtnLow" data-i18n="sev_low">Low</button>
                 </div>
                 <div class="search-box"><input type="text" id="riskySearch" placeholder="Search..." onkeyup="filterGrid('riskyGrid','riskySearch')"></div>
                 <div class="risky-grid" id="riskyGrid"></div>
@@ -347,7 +347,10 @@ en:{
     kpi_total_hosts:"Total hosts",kpi_success_rate:"Success rate",kpi_risky_hosts:"Risky hosts",kpi_unique_admins:"Unique admins",
     w_overview:"Overview",w_risk_focus:"Risk focus",w_perf:"Performance",w_data:"Data quality",
     col_actions:"Actions",rem_queue_title:"Remediation queue",rem_run_now:"Run now",rem_export:"Export .ps1",rem_clear:"Clear",
-    rem_empty:"Queue is empty",rem_nothing_selected:"Nothing selected",rem_confirm:"Run removal now on",rem_done:"Done"
+    rem_empty:"Queue is empty",rem_nothing_selected:"Nothing selected",rem_confirm:"Run removal now on",rem_done:"Done",
+    view_label:"View:",view_compact:"Compact",view_comfortable:"Comfortable",queue_selected:"Queue selected",
+    sev_all:"All",sev_critical:"Critical",sev_high:"High",sev_medium:"Medium",sev_low:"Low",
+    txt_success:"Success",txt_errors:"Errors",txt_methods:"Methods",txt_hosts:"hosts",txt_success_rate:"Success rate",txt_error_rate:"Error rate",txt_risk_coverage:"Risk coverage",txt_main_method:"Main method"
 },
 ru:{
     s_back:"\u2190 \u041d\u0430\u0437\u0430\u0434 \u043a \u0441\u043a\u0430\u043d\u0435\u0440\u0443",
@@ -396,10 +399,13 @@ ru:{
     kpi_total_hosts:"\u0412\u0441\u0435\u0433\u043e \u0445\u043e\u0441\u0442\u043e\u0432",kpi_success_rate:"\u0423\u0441\u043f\u0435\u0448\u043d\u044b\u0445, %",kpi_risky_hosts:"\u0420\u0438\u0441\u043a\u043e\u0432\u044b\u0435 \u0445\u043e\u0441\u0442\u044b",kpi_unique_admins:"\u0423\u043d\u0438\u043a. \u0430\u0434\u043c\u0438\u043d\u044b",
     w_overview:"\u041e\u0431\u0437\u043e\u0440",w_risk_focus:"\u0424\u043e\u043a\u0443\u0441 \u043d\u0430 \u0440\u0438\u0441\u043a\u0430\u0445",w_perf:"\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0438\u0442.",w_data:"\u041a\u0430\u0447\u0435\u0441\u0442\u0432\u043e \u0434\u0430\u043d\u043d\u044b\u0445",
     col_actions:"\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f",rem_queue_title:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u0438\u0441\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",rem_run_now:"\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c",rem_export:"\u042d\u043a\u0441\u043f\u043e\u0440\u0442 .ps1",rem_clear:"\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c",
-    rem_empty:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u0443\u0441\u0442\u0430",rem_nothing_selected:"\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043e",rem_confirm:"\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0434\u043b\u044f",rem_done:"\u0413\u043e\u0442\u043e\u0432\u043e"
+    rem_empty:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u0443\u0441\u0442\u0430",rem_nothing_selected:"\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043e",rem_confirm:"\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0434\u043b\u044f",rem_done:"\u0413\u043e\u0442\u043e\u0432\u043e",
+    view_label:"\u0412\u0438\u0434:",view_compact:"\u041a\u043e\u043c\u043f\u0430\u043a\u0442",view_comfortable:"\u0423\u0434\u043e\u0431\u043d\u044b\u0439",queue_selected:"\u0412 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0435",
+    sev_all:"\u0412\u0441\u0435",sev_critical:"\u041a\u0440\u0438\u0442.",sev_high:"\u0412\u044b\u0441\u043e\u043a.",sev_medium:"\u0421\u0440\u0435\u0434\u043d.",sev_low:"\u041d\u0438\u0437\u043a.",
+    txt_success:"\u0423\u0441\u043f\u0435\u0445",txt_errors:"\u041e\u0448\u0438\u0431\u043a\u0438",txt_methods:"\u041c\u0435\u0442\u043e\u0434\u044b",txt_hosts:"\u0445\u043e\u0441\u0442\u043e\u0432",txt_success_rate:"\u0414\u043e\u043b\u044f \u0443\u0441\u043f\u0435\u0445\u0430",txt_error_rate:"\u0414\u043e\u043b\u044f \u043e\u0448\u0438\u0431\u043e\u043a",txt_risk_coverage:"\u041f\u043e\u043a\u0440\u044b\u0442\u0438\u0435 \u0440\u0438\u0441\u043a\u0430",txt_main_method:"\u041e\u0441\u043d. \u043c\u0435\u0442\u043e\u0434"
 }};
 
-var currentLang="en";
+var currentLang="ru";
 function t(k){var d=LANG[currentLang]||LANG.en;return d[k]||(LANG.en[k]||k)}
 function setLang(l){currentLang=l;try{localStorage.setItem("scannerLang",l)}catch(e){}applyLang();updateLangBtns();if(SD)renderAll()}
 function applyLang(){
@@ -557,10 +563,10 @@ function renderStickyKpis(){
 }
 function renderWidgetBoard(){
     var key="summaryWidgetsOrder",defs=[
-        {id:"overview",title:t("w_overview"),txt:"Success: "+(SD.success||0)+" / "+(SD.total_scanned||0)},
+        {id:"overview",title:t("w_overview"),txt:t("txt_success")+": "+(SD.success||0)+" / "+(SD.total_scanned||0)},
         {id:"risk",title:t("w_risk_focus"),txt:"Critical: "+((SD.severity_breakdown||{}).critical||0)+", High: "+((SD.severity_breakdown||{}).high||0)},
         {id:"perf",title:t("w_perf"),txt:"Avg: "+formatDuration(SD.avg_scan_time_sec||0)+", Max: "+formatDuration(SD.max_scan_time_sec||0)},
-        {id:"data",title:t("w_data"),txt:"Errors: "+(SD.errors||0)+", Methods: "+Object.keys(SD.method_breakdown||{}).length}
+        {id:"data",title:t("w_data"),txt:t("txt_errors")+": "+(SD.errors||0)+", "+t("txt_methods")+": "+Object.keys(SD.method_breakdown||{}).length}
     ],map={},i;
     for(i=0;i<defs.length;i++)map[defs[i].id]=defs[i];
     var order=[];try{order=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){}
@@ -600,10 +606,10 @@ function renderCards(){var d=SD,sb=d.severity_breakdown||{};
     var topMethod="-",topMethodCount=0,mk=d.method_breakdown||{},k;
     for(k in mk){if(mk.hasOwnProperty(k)&&mk[k]>topMethodCount){topMethodCount=mk[k];topMethod=k}}
     var insightHtml=
-        "<div class=\"insight\"><div class=\"insight-title\">Success rate</div><div class=\"insight-val\">"+okPct+"%</div><div class=\"insight-sub\">"+success+" / "+total+" hosts</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,okPct)+"%;background:#5cb85c\"></span></div></div>"+
-        "<div class=\"insight\"><div class=\"insight-title\">Error rate</div><div class=\"insight-val\">"+errPct+"%</div><div class=\"insight-sub\">"+errors+" hosts with errors</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,errPct)+"%;background:#d9534f\"></span></div></div>"+
-        "<div class=\"insight\"><div class=\"insight-title\">Risk coverage</div><div class=\"insight-val\">"+riskPct+"%</div><div class=\"insight-sub\">"+risky+" risky / "+(d.clean_machines_count||0)+" clean</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,riskPct)+"%;background:#f0ad4e\"></span></div></div>"+
-        "<div class=\"insight\"><div class=\"insight-title\">Main method</div><div class=\"insight-val\">"+escapeHtml(topMethod)+"</div><div class=\"insight-sub\">"+topMethodCount+" hosts</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,pct(topMethodCount,total))+"%;background:#9b59b6\"></span></div></div>";
+        "<div class=\"insight\"><div class=\"insight-title\">"+t("txt_success_rate")+"</div><div class=\"insight-val\">"+okPct+"%</div><div class=\"insight-sub\">"+success+" / "+total+" "+t("txt_hosts")+"</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,okPct)+"%;background:#5cb85c\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">"+t("txt_error_rate")+"</div><div class=\"insight-val\">"+errPct+"%</div><div class=\"insight-sub\">"+errors+" "+t("txt_errors").toLowerCase()+"</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,errPct)+"%;background:#d9534f\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">"+t("txt_risk_coverage")+"</div><div class=\"insight-val\">"+riskPct+"%</div><div class=\"insight-sub\">"+risky+" risky / "+(d.clean_machines_count||0)+" clean</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,riskPct)+"%;background:#f0ad4e\"></span></div></div>"+
+        "<div class=\"insight\"><div class=\"insight-title\">"+t("txt_main_method")+"</div><div class=\"insight-val\">"+escapeHtml(topMethod)+"</div><div class=\"insight-sub\">"+topMethodCount+" "+t("txt_hosts")+"</div><div class=\"progress-mini\"><span style=\"width:"+Math.min(100,pct(topMethodCount,total))+"%;background:#9b59b6\"></span></div></div>";
     $("summaryInsights").innerHTML=insightHtml;
 }
 
