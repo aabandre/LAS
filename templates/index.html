@@ -6,7 +6,7 @@
     <title>Local Admin Scanner</title>
     <style>
         *{box-sizing:border-box}
-        body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:15px;background:#f0f2f5;color:#333}
+        body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:10px;background:#f0f2f5;color:#333}
         h1{margin:0 0 15px;color:#1a1a2e;font-size:22px}
         .container{max-width:1800px;width:96vw;margin:0 auto}
         .nav{margin-bottom:12px;overflow:hidden}
@@ -15,23 +15,22 @@
         .lang-switch{float:right}
         .lang-btn{padding:4px 12px;font-size:12px;font-weight:bold;border:1px solid #ccc;border-radius:3px;cursor:pointer;margin-left:4px;background:#fff;color:#333}
         .lang-btn.active{background:#4a90d9;color:#fff;border-color:#4a90d9}
-        .card{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:15px;margin-bottom:12px}
+        .card{background:#fff;border:1px solid #d0d0d0;border-radius:6px;padding:12px;margin-bottom:10px}
         .hero{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;background:linear-gradient(90deg,#f8fbff,#eef5ff);border:1px solid #d5e4fb;border-radius:6px;padding:12px;margin-bottom:12px}
         .hero h2{margin:0 0 4px;font-size:18px;color:#1c3f70}
         .hero p{margin:0;font-size:12px;color:#5e6f88}
         .quick-kpis{display:flex;gap:8px;flex-wrap:wrap}
         .quick-kpi{background:#fff;border:1px solid #dce7f8;border-radius:999px;padding:4px 10px;font-size:11px;color:#3d5f8f}
         .card h3{margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid #4a90d9;color:#1a1a2e;font-size:16px}
-        .form-row{margin-bottom:8px}
+        .form-row{margin-bottom:6px}
         .form-row label{display:block;font-weight:bold;margin-bottom:2px;font-size:12px;color:#555}
-        .form-row input,.form-row textarea{width:100%;padding:5px 7px;border:1px solid #ccc;border-radius:3px;font-size:13px}
-        .form-row textarea{height:50px;resize:vertical;font-family:Consolas,monospace;font-size:12px}
+        .form-row input,.form-row textarea{width:100%;padding:4px 6px;border:1px solid #ccc;border-radius:3px;font-size:12px}
+        .form-row textarea{height:44px;resize:vertical;font-family:Consolas,monospace;font-size:12px}
         .form-row-inline{margin-bottom:8px}
         .group-checks{display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:6px}
         .group-check{display:flex;align-items:center;gap:7px;background:#f8fbff;border:1px solid #dce8fb;border-radius:999px;padding:6px 10px;font-size:13px;line-height:1}
         .group-check input{margin:0}
-        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:6px 12px;padding:8px;background:#f8fbff;border:1px solid #dce8fb;border-radius:5px}
-        .opt-grid label{font-size:13px;display:flex;align-items:center;gap:6px}
+        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px;padding:8px;background:#f8fbff;border:1px solid #dce8fb;border-radius:8px}
         .cols{display:flex;gap:14px;flex-wrap:wrap}
         .col-left,.col-right{flex:1;min-width:320px}
         .btn{padding:8px 22px;font-size:13px;font-weight:bold;border:none;border-radius:3px;cursor:pointer;margin-right:6px;margin-top:8px}
@@ -77,10 +76,9 @@
         .mini-btn{padding:5px 10px;font-size:11px;border:none;border-radius:3px;background:#4a90d9;color:#fff;cursor:pointer}
         .mini-btn:hover{background:#3a7bc8}
         .help-txt{font-size:11px;color:#6d7b90;margin:4px 0 6px}
-        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:10px;padding:12px;background:#f8fbff;border:1px solid #dce8fb;border-radius:8px}
-        .opt-item{display:flex;align-items:center;gap:10px;line-height:1.25;background:#fff;border:1px solid #e1eaf8;border-radius:8px;padding:10px 12px;min-height:48px}
-        .opt-item input{margin:0;flex:0 0 auto}
-        .opt-item span{display:block;font-weight:600;color:#344b6b}
+        .opt-item{display:grid;grid-template-columns:18px 1fr;align-items:start;column-gap:8px;line-height:1.2;background:#fff;border:1px solid #e1eaf8;border-radius:6px;padding:8px 10px;min-height:40px}
+        .opt-item input{margin-top:2px}
+        .opt-item span{display:block;font-weight:600;color:#344b6b;word-break:break-word}
         @media (max-width:1200px){.ou-helper,.opt-grid{grid-template-columns:1fr}}
         @media (max-width:980px){.stats{grid-template-columns:repeat(3,minmax(90px,1fr))}}
     </style>
