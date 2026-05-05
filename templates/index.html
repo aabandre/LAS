@@ -6,7 +6,7 @@
     <title>Local Admin Scanner</title>
     <style>
         *{box-sizing:border-box}
-        body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:15px;background:#f0f2f5;color:#333}
+        body{font-family:Segoe UI,Tahoma,sans-serif;margin:0;padding:10px;background:#f0f2f5;color:#333}
         h1{margin:0 0 15px;color:#1a1a2e;font-size:22px}
         .container{max-width:1800px;width:96vw;margin:0 auto}
         .nav{margin-bottom:12px;overflow:hidden}
@@ -15,16 +15,22 @@
         .lang-switch{float:right}
         .lang-btn{padding:4px 12px;font-size:12px;font-weight:bold;border:1px solid #ccc;border-radius:3px;cursor:pointer;margin-left:4px;background:#fff;color:#333}
         .lang-btn.active{background:#4a90d9;color:#fff;border-color:#4a90d9}
-        .card{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:15px;margin-bottom:12px}
+        .card{background:#fff;border:1px solid #d0d0d0;border-radius:6px;padding:12px;margin-bottom:10px}
+        .hero{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;background:linear-gradient(90deg,#f8fbff,#eef5ff);border:1px solid #d5e4fb;border-radius:6px;padding:12px;margin-bottom:12px}
+        .hero h2{margin:0 0 4px;font-size:18px;color:#1c3f70}
+        .hero p{margin:0;font-size:12px;color:#5e6f88}
+        .quick-kpis{display:flex;gap:8px;flex-wrap:wrap}
+        .quick-kpi{background:#fff;border:1px solid #dce7f8;border-radius:999px;padding:4px 10px;font-size:11px;color:#3d5f8f}
         .card h3{margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid #4a90d9;color:#1a1a2e;font-size:16px}
-        .form-row{margin-bottom:8px}
+        .form-row{margin-bottom:6px}
         .form-row label{display:block;font-weight:bold;margin-bottom:2px;font-size:12px;color:#555}
-        .form-row input,.form-row textarea{width:100%;padding:5px 7px;border:1px solid #ccc;border-radius:3px;font-size:13px}
-        .form-row textarea{height:50px;resize:vertical;font-family:Consolas,monospace;font-size:12px}
+        .form-row input,.form-row textarea{width:100%;padding:4px 6px;border:1px solid #ccc;border-radius:3px;font-size:12px}
+        .form-row textarea{height:44px;resize:vertical;font-family:Consolas,monospace;font-size:12px}
         .form-row-inline{margin-bottom:8px}
-        .form-row-inline label{display:inline;font-weight:normal;font-size:13px;cursor:pointer}
-        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:6px 12px;padding:8px;background:#f8fbff;border:1px solid #dce8fb;border-radius:5px}
-        .opt-grid label{font-size:13px;display:flex;align-items:center;gap:6px}
+        .group-checks{display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:6px}
+        .group-check{display:flex;align-items:center;gap:7px;background:#f8fbff;border:1px solid #dce8fb;border-radius:999px;padding:6px 10px;font-size:13px;line-height:1}
+        .group-check input{margin:0}
+        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px;padding:8px;background:#f8fbff;border:1px solid #dce8fb;border-radius:8px}
         .cols{display:flex;gap:14px;flex-wrap:wrap}
         .col-left,.col-right{flex:1;min-width:320px}
         .btn{padding:8px 22px;font-size:13px;font-weight:bold;border:none;border-radius:3px;cursor:pointer;margin-right:6px;margin-top:8px}
@@ -70,9 +76,9 @@
         .mini-btn{padding:5px 10px;font-size:11px;border:none;border-radius:3px;background:#4a90d9;color:#fff;cursor:pointer}
         .mini-btn:hover{background:#3a7bc8}
         .help-txt{font-size:11px;color:#6d7b90;margin:4px 0 6px}
-        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px 18px;padding:10px;background:#f8fbff;border:1px solid #dce8fb;border-radius:5px}
-        .opt-item{display:flex;align-items:flex-start;gap:8px;line-height:1.2}
+        .opt-item{display:grid;grid-template-columns:18px 1fr;align-items:start;column-gap:8px;line-height:1.2;background:#fff;border:1px solid #e1eaf8;border-radius:6px;padding:8px 10px;min-height:40px}
         .opt-item input{margin-top:2px}
+        .opt-item span{display:block;font-weight:600;color:#344b6b;word-break:break-word}
         @media (max-width:1200px){.ou-helper,.opt-grid{grid-template-columns:1fr}}
         @media (max-width:980px){.stats{grid-template-columns:repeat(3,minmax(90px,1fr))}}
     </style>
@@ -87,6 +93,17 @@
         </span>
     </div>
     <h1 data-i18n="title">Local Administrators Scanner</h1>
+    <div class="hero">
+        <div>
+            <h2>Fast AD Local Admin Exposure Scanner</h2>
+            <p data-i18n="hero_hint">Оптимизировано для больших доменов: включайте алиасы и разрешённые админы, чтобы снизить ложные риски.</p>
+        </div>
+        <div class="quick-kpis">
+            <span class="quick-kpi">WinRM + RPC fallback</span>
+            <span class="quick-kpi">AD group expansion</span>
+            <span class="quick-kpi">Risk scoring + summary</span>
+        </div>
+    </div>
 
     <div class="card">
         <h3>
@@ -156,21 +173,24 @@
             </div>
         </div>
         <div class="form-row"><label data-i18n="lbl_allowed">Allowed Admins (one per line):</label><textarea id="cfgAllowed" placeholder="DOMAIN\Admin1&#10;DOMAIN\HelpDesk"></textarea></div>
+        <div class="help-txt" data-i18n="allowed_hint">Поддерживаются варианты `user`, `DOMAIN\user`; учитываются алиасы домена из поля ниже.</div>
         <div class="form-row"><label data-i18n="lbl_aliases">Additional domain aliases (one per line):</label><textarea id="cfgDomainAliases" placeholder="OTHERDOMAIN&#10;LEGACY"></textarea></div>
         <div class="form-row"><label data-i18n="lbl_include_hosts">Include objects (hostname/OS, wildcard * allowed):</label><textarea id="cfgIncludeHosts" placeholder="w10-ia-19*&#10;*server*"></textarea></div>
         <div class="form-row"><label data-i18n="lbl_exclude_hosts">Exclude objects (hostname/OS, wildcard * allowed):</label><textarea id="cfgExcludeHosts" placeholder="*test*&#10;*deprecated*"></textarea></div>
         <div class="form-row"><label data-i18n="lbl_os_contains">OS contains filter (optional):</label><input type="text" id="cfgOsContains" placeholder="Windows 10"></div>
         <div class="form-row-inline">
             <span data-i18n="lbl_groups">Local groups to scan:</span>
-            <label style="margin-left:10px"><input type="checkbox" id="grpAdministrators" checked> <span data-i18n="grp_admin">Administrators</span></label>
-            <label style="margin-left:10px"><input type="checkbox" id="grpRdp"> <span data-i18n="grp_rdp">Remote Desktop Users</span></label>
-            <label style="margin-left:10px"><input type="checkbox" id="grpDcom"> <span data-i18n="grp_dcom">Distributed COM Users</span></label>
-            <label style="margin-left:10px"><input type="checkbox" id="grpWinRm"> <span data-i18n="grp_winrm">Remote Management Users</span></label>
+            <div class="group-checks">
+                <label class="group-check"><input type="checkbox" id="grpAdministrators" checked> <span data-i18n="grp_admin">Administrators</span></label>
+                <label class="group-check"><input type="checkbox" id="grpRdp"> <span data-i18n="grp_rdp">Remote Desktop Users</span></label>
+                <label class="group-check"><input type="checkbox" id="grpDcom"> <span data-i18n="grp_dcom">Distributed COM Users</span></label>
+                <label class="group-check"><input type="checkbox" id="grpWinRm"> <span data-i18n="grp_winrm">Remote Management Users</span></label>
+            </div>
         </div>
         <div class="form-row">
             <label data-i18n="lbl_runtime_opts">Runtime options:</label>
             <div class="opt-grid">
-                <label class="opt-item"><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgExpand"> <span data-i18n="lbl_expand">Expand domain groups via LDAP (slower scan)</span></label>
                 <label class="opt-item"><input type="checkbox" id="cfgExpandUnknown"> <span data-i18n="lbl_expand_unknown">Expand unknown/account domain entries (slower)</span></label>
                 <label class="opt-item"><input type="checkbox" id="cfgRpcFallback" checked> <span data-i18n="lbl_rpc_fallback">Enable RPC fallback (SMB)</span></label>
                 <label class="opt-item"><input type="checkbox" id="cfgAdaptiveRpcOnWinrmError" checked> <span data-i18n="lbl_adaptive_rpc_on_winrm_error">If WinRM fails, still try RPC fallback</span></label>
@@ -223,6 +243,7 @@ var LANG = {
         btn_load: "Load",
         btn_stable_fast: "Stable Fast (WinRM)",
         btn_reliable_fast: "Reliable Fast (RPC+WinRM)",
+        hero_hint: "Optimized for large domains: use domain aliases and allowed admins to reduce false-positive risk.",
         btn_start: "Start Scan",
         btn_stop: "Stop",
         lbl_dc: "Domain Controller:",
@@ -249,6 +270,7 @@ var LANG = {
         lbl_expand_groups_cap: "Max domain groups to expand per host:",
         lbl_expand_members_cap: "Max members per expanded group:",
         lbl_allowed: "Allowed Admins (one per line):",
+        allowed_hint: "You can use `user` or `DOMAIN\\user`; domain aliases from the next field are also matched.",
         lbl_aliases: "Additional domain aliases (one per line):",
         lbl_include_hosts: "Include objects (hostname/OS, wildcard * allowed):",
         lbl_exclude_hosts: "Exclude objects (hostname/OS, wildcard * allowed):",
@@ -258,7 +280,7 @@ var LANG = {
         grp_rdp: "Remote Desktop Users",
         grp_dcom: "Distributed COM Users",
         grp_winrm: "Remote Management Users",
-        lbl_expand: "Expand domain groups via LDAP",
+        lbl_expand: "Expand domain groups via LDAP (slower scan)",
         lbl_runtime_opts: "Runtime options:",
         lbl_expand_unknown: "Expand unknown/account domain entries (slower)",
         lbl_rpc_fallback: "Enable RPC fallback (SMB)",
@@ -302,6 +324,7 @@ var LANG = {
         btn_load: "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c",
         btn_stable_fast: "Stable Fast (WinRM)",
         btn_reliable_fast: "Надёжный быстрый (RPC+WinRM)",
+        hero_hint: "Оптимизировано для больших доменов: используйте алиасы домена и разрешённых админов для снижения ложных рисков.",
         btn_start: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c",
         btn_stop: "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c",
         lbl_dc: "\u041a\u043e\u043d\u0442\u0440\u043e\u043b\u043b\u0435\u0440 \u0434\u043e\u043c\u0435\u043d\u0430:",
@@ -328,6 +351,7 @@ var LANG = {
         lbl_expand_groups_cap: "\u041c\u0430\u043a\u0441. \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0445 \u0433\u0440\u0443\u043f\u043f \u043d\u0430 \u0445\u043e\u0441\u0442 \u0434\u043b\u044f \u0440\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u044f:",
         lbl_expand_members_cap: "\u041c\u0430\u043a\u0441. \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u043e\u0432 \u0432 \u0440\u0430\u0437\u0432\u0451\u0440\u043d\u0443\u0442\u043e\u0439 \u0433\u0440\u0443\u043f\u043f\u0435:",
         lbl_allowed: "\u0420\u0430\u0437\u0440\u0435\u0448\u0451\u043d\u043d\u044b\u0435 \u0430\u0434\u043c\u0438\u043d\u044b (\u043f\u043e \u043e\u0434\u043d\u043e\u043c\u0443 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443):",
+        allowed_hint: "\u041c\u043e\u0436\u043d\u043e \u0443\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c `user` \u0438\u043b\u0438 `DOMAIN\\\\user`; \u0430\u043b\u0438\u0430\u0441\u044b \u0434\u043e\u043c\u0435\u043d\u0430 \u0438\u0437 \u043f\u043e\u043b\u044f \u043d\u0438\u0436\u0435 \u0442\u043e\u0436\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u044e\u0442\u0441\u044f.",
         lbl_aliases: "\u0414\u043e\u043f. \u0430\u043b\u0438\u0430\u0441\u044b \u0434\u043e\u043c\u0435\u043d\u043e\u0432 (\u043f\u043e \u043e\u0434\u043d\u043e\u043c\u0443 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443):",
         lbl_include_hosts: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043e\u0431\u044a\u0435\u043a\u0442\u044b (\u0445\u043e\u0441\u0442/\u041e\u0421, \u043c\u0430\u0441\u043a\u0430 *):",
         lbl_exclude_hosts: "\u0418\u0441\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043e\u0431\u044a\u0435\u043a\u0442\u044b (\u0445\u043e\u0441\u0442/\u041e\u0421, \u043c\u0430\u0441\u043a\u0430 *):",
@@ -337,7 +361,7 @@ var LANG = {
         grp_rdp: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0440\u0430\u0431\u043e\u0447\u0435\u0433\u043e \u0441\u0442\u043e\u043b\u0430",
         grp_dcom: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0440\u0430\u0441\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d\u043d\u043e\u0433\u043e COM",
         grp_winrm: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",
-        lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP",
+        lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP (\u0437\u0430\u043c\u0435\u0434\u043b\u044f\u0435\u0442 \u0441\u043a\u0430\u043d)",
         lbl_runtime_opts: "\u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b \u0440\u0435\u0436\u0438\u043c\u0430:",
         lbl_expand_unknown: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c unknown/account \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 (\u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0435\u0435)",
         lbl_rpc_fallback: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c RPC fallback (SMB)",
@@ -589,7 +613,7 @@ function applySettings(d){
         if(d.groups.hasOwnProperty("distributedComUsers")) $("grpDcom").checked=asBool(d.groups.distributedComUsers, false);
         if(d.groups.hasOwnProperty("remoteManagementUsers")) $("grpWinRm").checked=asBool(d.groups.remoteManagementUsers, false);
     }
-    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=asBool(d.expand, true);
+    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=asBool(d.expand, false);
     if(d.hasOwnProperty("expandUnknown")) $("cfgExpandUnknown").checked=asBool(d.expandUnknown, false);
     if(d.hasOwnProperty("rpcFallback")) $("cfgRpcFallback").checked=asBool(d.rpcFallback, true);
     if(d.hasOwnProperty("adaptiveRpcOnWinrmError")) $("cfgAdaptiveRpcOnWinrmError").checked=asBool(d.adaptiveRpcOnWinrmError, true);
