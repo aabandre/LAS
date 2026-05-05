@@ -27,7 +27,9 @@
         .form-row input,.form-row textarea{width:100%;padding:5px 7px;border:1px solid #ccc;border-radius:3px;font-size:13px}
         .form-row textarea{height:50px;resize:vertical;font-family:Consolas,monospace;font-size:12px}
         .form-row-inline{margin-bottom:8px}
-        .form-row-inline label{display:inline;font-weight:normal;font-size:13px;cursor:pointer}
+        .group-checks{display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:6px}
+        .group-check{display:flex;align-items:center;gap:7px;background:#f8fbff;border:1px solid #dce8fb;border-radius:999px;padding:6px 10px;font-size:13px;line-height:1}
+        .group-check input{margin:0}
         .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:6px 12px;padding:8px;background:#f8fbff;border:1px solid #dce8fb;border-radius:5px}
         .opt-grid label{font-size:13px;display:flex;align-items:center;gap:6px}
         .cols{display:flex;gap:14px;flex-wrap:wrap}
@@ -75,9 +77,10 @@
         .mini-btn{padding:5px 10px;font-size:11px;border:none;border-radius:3px;background:#4a90d9;color:#fff;cursor:pointer}
         .mini-btn:hover{background:#3a7bc8}
         .help-txt{font-size:11px;color:#6d7b90;margin:4px 0 6px}
-        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px 18px;padding:10px;background:#f8fbff;border:1px solid #dce8fb;border-radius:5px}
-        .opt-item{display:flex;align-items:flex-start;gap:8px;line-height:1.2}
-        .opt-item input{margin-top:2px}
+        .opt-grid{display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:10px;padding:12px;background:#f8fbff;border:1px solid #dce8fb;border-radius:8px}
+        .opt-item{display:flex;align-items:center;gap:10px;line-height:1.25;background:#fff;border:1px solid #e1eaf8;border-radius:8px;padding:10px 12px;min-height:48px}
+        .opt-item input{margin:0;flex:0 0 auto}
+        .opt-item span{display:block;font-weight:600;color:#344b6b}
         @media (max-width:1200px){.ou-helper,.opt-grid{grid-template-columns:1fr}}
         @media (max-width:980px){.stats{grid-template-columns:repeat(3,minmax(90px,1fr))}}
     </style>
@@ -179,10 +182,12 @@
         <div class="form-row"><label data-i18n="lbl_os_contains">OS contains filter (optional):</label><input type="text" id="cfgOsContains" placeholder="Windows 10"></div>
         <div class="form-row-inline">
             <span data-i18n="lbl_groups">Local groups to scan:</span>
-            <label style="margin-left:10px"><input type="checkbox" id="grpAdministrators" checked> <span data-i18n="grp_admin">Administrators</span></label>
-            <label style="margin-left:10px"><input type="checkbox" id="grpRdp"> <span data-i18n="grp_rdp">Remote Desktop Users</span></label>
-            <label style="margin-left:10px"><input type="checkbox" id="grpDcom"> <span data-i18n="grp_dcom">Distributed COM Users</span></label>
-            <label style="margin-left:10px"><input type="checkbox" id="grpWinRm"> <span data-i18n="grp_winrm">Remote Management Users</span></label>
+            <div class="group-checks">
+                <label class="group-check"><input type="checkbox" id="grpAdministrators" checked> <span data-i18n="grp_admin">Administrators</span></label>
+                <label class="group-check"><input type="checkbox" id="grpRdp"> <span data-i18n="grp_rdp">Remote Desktop Users</span></label>
+                <label class="group-check"><input type="checkbox" id="grpDcom"> <span data-i18n="grp_dcom">Distributed COM Users</span></label>
+                <label class="group-check"><input type="checkbox" id="grpWinRm"> <span data-i18n="grp_winrm">Remote Management Users</span></label>
+            </div>
         </div>
         <div class="form-row">
             <label data-i18n="lbl_runtime_opts">Runtime options:</label>
