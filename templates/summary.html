@@ -22,7 +22,7 @@
         .toolbar button.print-btn{background:#9b59b6}
         .toolbar button.diff-btn{background:#e67e22}
         .toolbar button.rebuild-btn{background:#1abc9c}
-        .tabs{overflow:hidden;border-bottom:2px solid #4a90d9;margin-bottom:12px}
+        .tabs{overflow:hidden;border-bottom:2px solid #4a90d9;margin-bottom:12px;position:sticky;top:0;background:#f0f2f5;z-index:3;padding-top:4px}
         .tab{float:left;padding:7px 18px;cursor:pointer;font-size:13px;font-weight:bold;color:#666;background:#e8e8e8;border:1px solid #ccc;border-bottom:none;border-radius:4px 4px 0 0;margin-right:2px}
         .tab:hover{background:#d0d0d0}
         .tab.active{background:#fff;color:#4a90d9;border-color:#4a90d9;border-bottom:2px solid #fff;margin-bottom:-2px}
@@ -41,8 +41,8 @@
         .progress-mini{margin-top:6px;height:6px;background:#edf2fb;border-radius:999px;overflow:hidden}
         .progress-mini > span{display:block;height:100%;background:#4a90d9}
         .c-blue{color:#4a90d9}.c-green{color:#5cb85c}.c-red{color:#d9534f}.c-orange{color:#f0ad4e}.c-purple{color:#9b59b6}.c-teal{color:#1abc9c}.c-gray{color:#95a5a6}.c-dark{color:#34495e}.c-pink{color:#e74c3c}
-        .charts{overflow:hidden;margin-bottom:12px}
-        .chart-box{float:left;width:20%;padding:3px}
+        .charts{display:grid;grid-template-columns:repeat(5,minmax(220px,1fr));gap:6px;margin-bottom:12px}
+        .chart-box{padding:0}
         .chart-inner{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:12px;min-height:280px}
         .chart-inner h3{margin:0 0 8px;font-size:12px;color:#1a1a2e}
         canvas{display:block;margin:0 auto}
@@ -55,6 +55,11 @@
         .search-box input{padding:4px 8px;width:250px;font-size:12px;border:1px solid #ccc;border-radius:3px}
         .filter-options{margin-bottom:8px;font-size:12px}
         .filter-options label{display:inline;margin-right:12px;cursor:pointer}
+        .admin-controls{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0}
+        .view-options{display:flex;align-items:center;gap:8px;font-size:12px}
+        .view-options select{padding:3px 6px;border:1px solid #ccc;border-radius:3px}
+        .admin-kpis{display:flex;gap:8px;flex-wrap:wrap}
+        .admin-kpi{background:#f7faff;border:1px solid #dce7f8;color:#3a5f92;padding:4px 8px;border-radius:999px;font-size:11px}
         table{width:100%;border-collapse:collapse;font-size:11px}
         th{background:#4a90d9;color:#fff;padding:6px;text-align:left;cursor:pointer;white-space:nowrap}
         th:hover{background:#3a7bc8}
@@ -114,6 +119,8 @@
         .diff-stat{float:left;width:25%;text-align:center;padding:8px}
         .no-data{text-align:center;padding:40px;color:#999;font-size:16px}
         @media print{.toolbar,.tabs,.search-box,.back,.filter-options,.lang-switch{display:none!important}.tab-content{display:block!important}body{background:#fff;padding:5px}}
+        @media (max-width:1400px){.charts{grid-template-columns:repeat(3,minmax(220px,1fr))}}
+        @media (max-width:960px){.charts{grid-template-columns:repeat(2,minmax(220px,1fr))}}
     </style>
 </head>
 <body>
@@ -162,7 +169,7 @@
         <div class="tab-content" id="tabAdmins">
             <div class="tbl-wrap">
                 <h3><span data-i18n="adm_title">All Admin Accounts</span> &mdash; <span data-i18n="adm_showing">Showing</span> <span id="adminShowing">0</span> <span data-i18n="adm_of">of</span> <span id="adminTotal">0</span></h3>
-                <div class="search-box"><input type="text" id="adminSearch" data-i18n-placeholder="adm_search" placeholder="Search..." onkeyup="filterAdmins()"></div>
+                <div class="search-box"><input type="text" id="adminSearch" data-i18n-placeholder="adm_search" placeholder="Search..."></div>
                 <div class="machine-filter">
                     <label for="machineFilter" data-i18n="machine_filter">Machine:</label>
                     <select id="machineFilter" onchange="filterAdmins();renderMachineDetails()"><option value="" data-i18n="machine_all">All machines</option></select>
@@ -175,6 +182,16 @@
                     <label><input type="checkbox" id="showOnlyViaGroup" onchange="filterAdmins()"> <span data-i18n="adm_only_via">Only via group</span></label>
                     <label><input type="checkbox" id="hideGroupHeaders" onchange="filterAdmins()"> <span data-i18n="adm_hide_groups">Hide groups</span></label>
                     <label><input type="checkbox" id="showOnlyLocalFromGroups" onchange="filterAdmins()"> <span data-i18n="adm_only_local_groups">Only local from groups</span></label>
+                </div>
+                <div class="admin-controls">
+                    <div class="admin-kpis" id="adminKpis"></div>
+                    <div class="view-options">
+                        <label for="adminDensity">View:</label>
+                        <select id="adminDensity" onchange="changeAdminDensity()">
+                            <option value="compact">Compact</option>
+                            <option value="comfortable">Comfortable</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="admin-table-wrap">
                     <table id="adminTable">
@@ -339,6 +356,14 @@ function applyLang(){
 function updateLangBtns(){var bs=document.getElementsByClassName("lang-btn");for(var i=0;i<bs.length;i++){bs[i].className=bs[i].innerHTML===currentLang.toUpperCase()?"lang-btn active":"lang-btn"}}
 try{var sl=localStorage.getItem("scannerLang");if(sl)currentLang=sl}catch(e){}
 window.addEventListener("load",function(){applyLang();updateLangBtns()});
+window.addEventListener("load",function(){
+    var timer=null,input=$("adminSearch");
+    if(!input)return;
+    input.addEventListener("keyup",function(){
+        if(timer)clearTimeout(timer);
+        timer=setTimeout(function(){adminCurrentPage=1;filterAdmins()},120);
+    });
+});
 
 /* ═══════════════════════════════════════ */
 var SD=null,COLORS=["#4a90d9","#5cb85c","#d9534f","#f0ad4e","#9b59b6","#1abc9c","#e74c3c","#3498db","#2ecc71","#e67e22","#95a5a6","#34495e","#16a085","#c0392b","#8e44ad","#2c3e50"];
@@ -409,7 +434,8 @@ function saveAdminFilters(){
             hideGroupHeaders: $("hideGroupHeaders")?$("hideGroupHeaders").checked:false,
             showOnlyLocalFromGroups: $("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false,
             machineFilter: val("machineFilter"),
-            adminPageSize: val("adminPageSize")||"50"
+            adminPageSize: val("adminPageSize")||"50",
+            adminDensity: val("adminDensity")||"compact"
         };
         localStorage.setItem("summaryAdminFilters", JSON.stringify(payload));
     }catch(e){}
@@ -428,6 +454,7 @@ function loadAdminFilters(){
         if(data.hasOwnProperty("showOnlyLocalFromGroups")&&$("showOnlyLocalFromGroups")) $("showOnlyLocalFromGroups").checked=!!data.showOnlyLocalFromGroups;
         if(data.hasOwnProperty("machineFilter")&&$("machineFilter")) $("machineFilter").value=data.machineFilter||"";
         if(data.hasOwnProperty("adminPageSize")&&$("adminPageSize")) $("adminPageSize").value=data.adminPageSize||"50";
+        if(data.hasOwnProperty("adminDensity")&&$("adminDensity")) $("adminDensity").value=data.adminDensity||"compact";
     }catch(e){}
 }
 getJSON("/api/scans",function(s,data){
@@ -458,7 +485,7 @@ function renderAll(){if(!SD)return;buildTabs();applyLang();renderCards();
     drawPie("cResults","lResults",{"Success":SD.success||0,"Errors":SD.errors||0},["#5cb85c","#d9534f"]);
     drawPie("cMethods","lMethods",SD.method_breakdown||{},COLORS);drawPie("cErrors","lErrors",SD.error_breakdown||{},COLORS.slice(2));
     drawPie("cOS","lOS",SD.os_breakdown||{},COLORS.slice(4));drawPie("cPorts","lPorts",SD.port_statistics||{},COLORS);
-    renderAdmins();renderMachineFilter();loadAdminFilters();filterAdmins();renderMachineDetails();renderRisky();renderClean();renderHeatmap();renderTopErrorHosts()}
+    renderAdmins();renderMachineFilter();loadAdminFilters();applyAdminDensity();filterAdmins();renderMachineDetails();renderRisky();renderClean();renderHeatmap();renderTopErrorHosts()}
 
 function renderCards(){var d=SD,sb=d.severity_breakdown||{};
     var items=[{v:d.total_scanned||0,l:"card_total",c:"c-blue"},{v:d.success||0,l:"card_success",c:"c-green"},{v:d.errors||0,l:"card_errors",c:"c-red"},
@@ -534,10 +561,27 @@ function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineF
     var txt=$( "adminPagerText");if(txt)txt.innerHTML=(matched.length?start+1:0)+"-"+Math.min(end,matched.length)+" / "+matched.length;
     if($("adminPrevBtn"))$("adminPrevBtn").disabled=adminCurrentPage<=1;
     if($("adminNextBtn"))$("adminNextBtn").disabled=adminCurrentPage>=totalPages;
-    $("adminShowing").innerHTML=matched.length;saveAdminFilters()
+    $("adminShowing").innerHTML=matched.length;renderAdminKpis(rows.length,matched.length);saveAdminFilters()
 }
 function changeAdminPage(delta){adminCurrentPage=Math.max(1,adminCurrentPage+delta);filterAdmins()}
 function changeAdminPageSize(){adminCurrentPage=1;filterAdmins()}
+function changeAdminDensity(){applyAdminDensity();saveAdminFilters()}
+function applyAdminDensity(){
+    var table=$("adminTable");if(!table)return;
+    var comfortable=val("adminDensity")==="comfortable";
+    table.style.fontSize=comfortable?"12px":"11px";
+    var tds=table.getElementsByTagName("td"),ths=table.getElementsByTagName("th"),i;
+    for(i=0;i<tds.length;i++)tds[i].style.padding=comfortable?"7px 8px":"4px 6px";
+    for(i=0;i<ths.length;i++)ths[i].style.padding=comfortable?"8px":"6px";
+}
+function renderAdminKpis(total,filtered){
+    var box=$("adminKpis");if(!box)return;
+    var pctVal=total?Math.round((filtered/total)*100):0;
+    box.innerHTML='<span class="admin-kpi">Visible: <b>'+filtered+'</b></span>'
+        +'<span class="admin-kpi">Total: <b>'+total+'</b></span>'
+        +'<span class="admin-kpi">Coverage: <b>'+pctVal+'%</b></span>'
+        +'<span class="admin-kpi">Page: <b>'+adminCurrentPage+'</b></span>';
+}
 
 function renderMachineFilter(){
     var sel=$("machineFilter");if(!sel)return;

@@ -268,10 +268,39 @@ class Metrics:
 metrics = Metrics()
 
 
-def calc_risk_score(members, allowed_admins=None):
+def _build_allowed_principal_set(allowed_admins, domain_aliases=None):
+    allowed_admins = allowed_admins or []
+    domain_aliases = domain_aliases or []
+    alias_set = set()
+    for alias in domain_aliases:
+        a = str(alias or "").strip().lower()
+        if a:
+            alias_set.add(a)
+
+    normalized = set()
+    for raw in allowed_admins:
+        item = str(raw or "").strip().lower()
+        if not item:
+            continue
+        normalized.add(item)
+        short = item.split("\\")[-1] if "\\" in item else item
+        normalized.add(short)
+        if "\\" in item:
+            dom, principal = item.split("\\", 1)
+            dom = dom.strip().lower()
+            principal = principal.strip().lower()
+            if principal:
+                normalized.add(principal)
+            if dom and principal and alias_set:
+                for alias in alias_set:
+                    normalized.add(alias + "\\" + principal)
+    return normalized
+
+
+def calc_risk_score(members, allowed_admins=None, domain_aliases=None):
     if allowed_admins is None:
         allowed_admins = set()
-    allowed_lower = set(a.lower() for a in allowed_admins)
+    allowed_lower = _build_allowed_principal_set(allowed_admins, domain_aliases)
 
     score = 0
     reasons = []
@@ -2324,7 +2353,11 @@ foreach ($groupName in $candidates) {
 
             result["members"] = classified
             self._add_members(len(classified))
-            result["risk"] = calc_risk_score(classified, set(self.config.get("allowed_admins", [])))
+            result["risk"] = calc_risk_score(
+                classified,
+                set(self.config.get("allowed_admins", [])),
+                self.config.get("domain_aliases", []),
+            )
 
         except Exception as e:
             if str(e) != "Cancelled":
