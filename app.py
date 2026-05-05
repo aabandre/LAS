@@ -2345,7 +2345,7 @@ foreach ($groupName in $candidates) {
                 classified.append(classified_member)
 
             classified = self._expand_with_domain_aliases(classified, self.config.get("domain_aliases", []))
-            if self.config.get("expand_groups", True):
+            if self.config.get("expand_groups", False):
                 try:
                     classified = self._expand_domain_groups(classified)
                 except Exception as expand_err:

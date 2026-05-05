@@ -190,7 +190,7 @@
         <div class="form-row">
             <label data-i18n="lbl_runtime_opts">Runtime options:</label>
             <div class="opt-grid">
-                <label class="opt-item"><input type="checkbox" id="cfgExpand" checked> <span data-i18n="lbl_expand">Expand domain groups via LDAP</span></label>
+                <label class="opt-item"><input type="checkbox" id="cfgExpand"> <span data-i18n="lbl_expand">Expand domain groups via LDAP (slower scan)</span></label>
                 <label class="opt-item"><input type="checkbox" id="cfgExpandUnknown"> <span data-i18n="lbl_expand_unknown">Expand unknown/account domain entries (slower)</span></label>
                 <label class="opt-item"><input type="checkbox" id="cfgRpcFallback" checked> <span data-i18n="lbl_rpc_fallback">Enable RPC fallback (SMB)</span></label>
                 <label class="opt-item"><input type="checkbox" id="cfgAdaptiveRpcOnWinrmError" checked> <span data-i18n="lbl_adaptive_rpc_on_winrm_error">If WinRM fails, still try RPC fallback</span></label>
@@ -280,7 +280,7 @@ var LANG = {
         grp_rdp: "Remote Desktop Users",
         grp_dcom: "Distributed COM Users",
         grp_winrm: "Remote Management Users",
-        lbl_expand: "Expand domain groups via LDAP",
+        lbl_expand: "Expand domain groups via LDAP (slower scan)",
         lbl_runtime_opts: "Runtime options:",
         lbl_expand_unknown: "Expand unknown/account domain entries (slower)",
         lbl_rpc_fallback: "Enable RPC fallback (SMB)",
@@ -361,7 +361,7 @@ var LANG = {
         grp_rdp: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0440\u0430\u0431\u043e\u0447\u0435\u0433\u043e \u0441\u0442\u043e\u043b\u0430",
         grp_dcom: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0440\u0430\u0441\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d\u043d\u043e\u0433\u043e COM",
         grp_winrm: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",
-        lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP",
+        lbl_expand: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0433\u0440\u0443\u043f\u043f\u044b \u0447\u0435\u0440\u0435\u0437 LDAP (\u0437\u0430\u043c\u0435\u0434\u043b\u044f\u0435\u0442 \u0441\u043a\u0430\u043d)",
         lbl_runtime_opts: "\u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b \u0440\u0435\u0436\u0438\u043c\u0430:",
         lbl_expand_unknown: "\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u0442\u044c unknown/account \u0434\u043e\u043c\u0435\u043d\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 (\u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0435\u0435)",
         lbl_rpc_fallback: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c RPC fallback (SMB)",
@@ -613,7 +613,7 @@ function applySettings(d){
         if(d.groups.hasOwnProperty("distributedComUsers")) $("grpDcom").checked=asBool(d.groups.distributedComUsers, false);
         if(d.groups.hasOwnProperty("remoteManagementUsers")) $("grpWinRm").checked=asBool(d.groups.remoteManagementUsers, false);
     }
-    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=asBool(d.expand, true);
+    if(d.hasOwnProperty("expand")) $("cfgExpand").checked=asBool(d.expand, false);
     if(d.hasOwnProperty("expandUnknown")) $("cfgExpandUnknown").checked=asBool(d.expandUnknown, false);
     if(d.hasOwnProperty("rpcFallback")) $("cfgRpcFallback").checked=asBool(d.rpcFallback, true);
     if(d.hasOwnProperty("adaptiveRpcOnWinrmError")) $("cfgAdaptiveRpcOnWinrmError").checked=asBool(d.adaptiveRpcOnWinrmError, true);

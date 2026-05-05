@@ -349,7 +349,7 @@ en:{
     col_actions:"Actions",rem_queue_title:"Remediation queue",rem_run_now:"Run now",rem_export:"Export .ps1",rem_clear:"Clear",
     rem_empty:"Queue is empty",rem_nothing_selected:"Nothing selected",rem_confirm:"Run removal now on",rem_done:"Done",
     view_label:"View:",view_compact:"Compact",view_comfortable:"Comfortable",queue_selected:"Queue selected",
-    sev_all:"All",sev_critical:"Critical",sev_high:"High",sev_medium:"Medium",sev_low:"Low",
+    sev_all:"All",sev_critical:"Critical",sev_high:"High",sev_medium:"Medium",sev_low:"Low",act_queue:"Queue",kpi_coverage:"Coverage",kpi_page:"Page",
     txt_success:"Success",txt_errors:"Errors",txt_methods:"Methods",txt_hosts:"hosts",txt_success_rate:"Success rate",txt_error_rate:"Error rate",txt_risk_coverage:"Risk coverage",txt_main_method:"Main method"
 },
 ru:{
@@ -401,7 +401,7 @@ ru:{
     col_actions:"\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f",rem_queue_title:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u0438\u0441\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",rem_run_now:"\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c",rem_export:"\u042d\u043a\u0441\u043f\u043e\u0440\u0442 .ps1",rem_clear:"\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c",
     rem_empty:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u0443\u0441\u0442\u0430",rem_nothing_selected:"\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043e",rem_confirm:"\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0434\u043b\u044f",rem_done:"\u0413\u043e\u0442\u043e\u0432\u043e",
     view_label:"\u0412\u0438\u0434:",view_compact:"\u041a\u043e\u043c\u043f\u0430\u043a\u0442",view_comfortable:"\u0423\u0434\u043e\u0431\u043d\u044b\u0439",queue_selected:"\u0412 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0435",
-    sev_all:"\u0412\u0441\u0435",sev_critical:"\u041a\u0440\u0438\u0442.",sev_high:"\u0412\u044b\u0441\u043e\u043a.",sev_medium:"\u0421\u0440\u0435\u0434\u043d.",sev_low:"\u041d\u0438\u0437\u043a.",
+    sev_all:"\u0412\u0441\u0435",sev_critical:"\u041a\u0440\u0438\u0442.",sev_high:"\u0412\u044b\u0441\u043e\u043a.",sev_medium:"\u0421\u0440\u0435\u0434\u043d.",sev_low:"\u041d\u0438\u0437\u043a.",act_queue:"\u0412 \u043e\u0447\u0435\u0440\u0435\u0434\u044c",kpi_coverage:"\u041e\u0445\u0432\u0430\u0442",kpi_page:"\u0421\u0442\u0440.",
     txt_success:"\u0423\u0441\u043f\u0435\u0445",txt_errors:"\u041e\u0448\u0438\u0431\u043a\u0438",txt_methods:"\u041c\u0435\u0442\u043e\u0434\u044b",txt_hosts:"\u0445\u043e\u0441\u0442\u043e\u0432",txt_success_rate:"\u0414\u043e\u043b\u044f \u0443\u0441\u043f\u0435\u0445\u0430",txt_error_rate:"\u0414\u043e\u043b\u044f \u043e\u0448\u0438\u0431\u043e\u043a",txt_risk_coverage:"\u041f\u043e\u043a\u0440\u044b\u0442\u0438\u0435 \u0440\u0438\u0441\u043a\u0430",txt_main_method:"\u041e\u0441\u043d. \u043c\u0435\u0442\u043e\u0434"
 }};
 
@@ -564,8 +564,8 @@ function renderStickyKpis(){
 function renderWidgetBoard(){
     var key="summaryWidgetsOrder",defs=[
         {id:"overview",title:t("w_overview"),txt:t("txt_success")+": "+(SD.success||0)+" / "+(SD.total_scanned||0)},
-        {id:"risk",title:t("w_risk_focus"),txt:"Critical: "+((SD.severity_breakdown||{}).critical||0)+", High: "+((SD.severity_breakdown||{}).high||0)},
-        {id:"perf",title:t("w_perf"),txt:"Avg: "+formatDuration(SD.avg_scan_time_sec||0)+", Max: "+formatDuration(SD.max_scan_time_sec||0)},
+        {id:"risk",title:t("w_risk_focus"),txt:t("sev_critical")+": "+((SD.severity_breakdown||{}).critical||0)+", "+t("sev_high")+": "+((SD.severity_breakdown||{}).high||0)},
+        {id:"perf",title:t("w_perf"),txt:t("card_avg")+": "+formatDuration(SD.avg_scan_time_sec||0)+", "+t("card_max")+": "+formatDuration(SD.max_scan_time_sec||0)},
         {id:"data",title:t("w_data"),txt:t("txt_errors")+": "+(SD.errors||0)+", "+t("txt_methods")+": "+Object.keys(SD.method_breakdown||{}).length}
     ],map={},i;
     for(i=0;i<defs.length;i++)map[defs[i].id]=defs[i];
@@ -651,7 +651,7 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
             +"<td><input type=\"checkbox\" class=\"admin-row-chk\"></td><td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
             +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td>"
-            +"<td><button class=\"mini-danger\" onclick=\"queueAdminForRemoval('"+(a.account||"").replace(/'/g,"\\'")+"')\">Queue</button></td></tr>"}
+            +"<td><button class=\"mini-danger\" onclick=\"queueAdminForRemoval('"+(a.account||"").replace(/'/g,"\\'")+"')\">"+t("act_queue")+"</button></td></tr>"}
     $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;adminCurrentPage=1;filterAdmins()}
 
 function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false,oLG=$("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false;
@@ -684,10 +684,10 @@ function applyAdminDensity(){
 function renderAdminKpis(total,filtered){
     var box=$("adminKpis");if(!box)return;
     var pctVal=total?Math.round((filtered/total)*100):0;
-    box.innerHTML='<span class="admin-kpi">Visible: <b>'+filtered+'</b></span>'
-        +'<span class="admin-kpi">Total: <b>'+total+'</b></span>'
-        +'<span class="admin-kpi">Coverage: <b>'+pctVal+'%</b></span>'
-        +'<span class="admin-kpi">Page: <b>'+adminCurrentPage+'</b></span>';
+    box.innerHTML='<span class="admin-kpi">'+t("adm_showing")+': <b>'+filtered+'</b></span>'
+        +'<span class="admin-kpi">'+t("card_total")+': <b>'+total+'</b></span>'
+        +'<span class="admin-kpi">'+t("kpi_coverage")+': <b>'+pctVal+'%</b></span>'
+        +'<span class="admin-kpi">'+t("kpi_page")+': <b>'+adminCurrentPage+'</b></span>';
 }
 
 function renderMachineFilter(){
