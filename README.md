@@ -94,6 +94,11 @@ summary_YYYYMMDD_HHMMSS.json
 - Limit management protocol exposure (WinRM/WMI/RPC) by policy.
 - Protect generated reports (they may contain sensitive account mapping).
 
+### Detailed operator manuals
+
+- RU UI quick manual (buttons/parameters): `docs/UI_OPERATOR_GUIDE_RU.md`
+- Confluence-ready RU manual (copy/paste): `docs/CONFLUENCE_UI_GUIDE_RU.md`
+
 ---
 
 ## 🇷🇺 Русская версия
@@ -186,3 +191,7 @@ summary_YYYYMMDD_HHMMSS.json
 - Ограничивайте доступ к WinRM/WMI/RPC на уровне политик и ACL.
 - Храните отчёты в защищённом месте (они содержат чувствительные данные по доступам).
 
+### Подробные инструкции для оператора
+
+- Быстрая инструкция по UI (кнопки/параметры): `docs/UI_OPERATOR_GUIDE_RU.md`
+- Отдельная версия для Confluence (готова к вставке): `docs/CONFLUENCE_UI_GUIDE_RU.md`
