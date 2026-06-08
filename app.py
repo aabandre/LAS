@@ -1,4 +1,5 @@
 import os
+import base64
 import sys
 import csv
 import json
@@ -172,28 +173,73 @@ def repair_mojibake(value):
     return value
 
 
+def is_corrupt_account_name(text):
+    value = str(text or "")
+    if "\ufffd" in value or "пїѕ" in value.casefold():
+        return True
+    return len(value) > 80 and _mojibake_score(value) >= 8
+
+
+def _looks_like_utf16(raw_bytes):
+    if len(raw_bytes) < 4 or len(raw_bytes) % 2:
+        return False
+    even_nuls = raw_bytes[0::2].count(0)
+    odd_nuls = raw_bytes[1::2].count(0)
+    pairs = len(raw_bytes) // 2
+    return max(even_nuls, odd_nuls) / pairs >= 0.3
+
+
 def smart_decode(raw_bytes):
     if not raw_bytes:
         return ""
-    for enc in ["utf-8-sig", "utf-8", "utf-16-le", "utf-16-be", "cp1251", "cp866"]:
+
+    if raw_bytes.startswith(b"\xef\xbb\xbf"):
+        return raw_bytes.decode("utf-8-sig")
+    if raw_bytes.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encoding = "utf-16-le" if raw_bytes.startswith(b"\xff\xfe") else "utf-16-be"
+        return raw_bytes[2:].decode(encoding)
+
+    encodings = ["utf-8"]
+    if _looks_like_utf16(raw_bytes):
+        encodings.extend(["utf-16-le", "utf-16-be"])
+    encodings.extend(["cp1251", "cp866"])
+
+    for encoding in encodings:
         try:
-            text = raw_bytes.decode(enc)
-            if "\ufffd" not in text:
-                return repair_mojibake_text(text)
+            return raw_bytes.decode(encoding)
         except (UnicodeDecodeError, ValueError):
             pass
     return repair_mojibake_text(raw_bytes.decode("utf-8", errors="replace"))
 
 
+PS_PAYLOAD_PREFIX = "LAS-UTF8-B64:"
+
+
+def decode_ps_output(raw_bytes):
+    decoded = smart_decode(raw_bytes).strip()
+    for line in decoded.splitlines():
+        payload = line.strip()
+        if not payload.startswith(PS_PAYLOAD_PREFIX):
+            continue
+        encoded = payload[len(PS_PAYLOAD_PREFIX):]
+        try:
+            return base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            raise RuntimeError("Invalid UTF-8 payload returned by PowerShell")
+    return decoded
+
+
 PS_ENCODING_PREFIX = r"""
 $ErrorActionPreference = 'Stop'
-try {
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [Console]::InputEncoding = $utf8NoBom
-    [Console]::OutputEncoding = $utf8NoBom
-    $OutputEncoding = $utf8NoBom
-    chcp.com 65001 > $null 2>&1
-} catch {}
+function Write-LasJson {
+    param(
+        [Parameter(Mandatory=$true)] $Value,
+        [int] $Depth = 4
+    )
+    $json = $Value | ConvertTo-Json -Compress -Depth $Depth
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    Write-Output ("LAS-UTF8-B64:" + [System.Convert]::ToBase64String($bytes))
+}
 """
 
 
@@ -1286,7 +1332,7 @@ class Scanner:
         raw = (resp.std_out or b"").strip()
         if not raw:
             return []
-        decoded = smart_decode(raw)
+        decoded = decode_ps_output(raw)
         try:
             data = json.loads(decoded)
         except (json.JSONDecodeError, ValueError):
@@ -1313,6 +1359,8 @@ class Scanner:
                 obj_type = "unknown"
                 sid = ""
             name = repair_mojibake_text(name.strip())
+            if is_corrupt_account_name(name):
+                continue
             if sid.endswith("-500") and ("?" in name or "Ђ" in name or "¤" in name):
                 if "\\" in name:
                     host_part = name.split("\\", 1)[0].strip() or "LOCALHOST"
@@ -1412,25 +1460,40 @@ class Scanner:
             last_error = None
 
             try:
+                group_names = LOCAL_GROUP_NAME_ALIASES.get(sid, [group_name])
+                ps_names = ", ".join("'" + n.replace("'", "''") + "'" for n in group_names)
                 script = r"""
 $targetSid = "__GROUP_SID__"
-$group = [ADSI]("WinNT://./" + $targetSid + ",group")
-$result = @()
-foreach ($member in $group.psbase.Invoke("Members")) {
-    $cls  = $member.GetType().InvokeMember("Class",  'GetProperty', $null, $member, $null)
-    $name = $member.GetType().InvokeMember("Name",   'GetProperty', $null, $member, $null)
-    $path = $member.GetType().InvokeMember("ADsPath",'GetProperty', $null, $member, $null)
-    $domain = ""
-    if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
-    if ($domain -and $domain -ne $env:COMPUTERNAME) {
-        $fullname = "{0}\{1}" -f $domain, $name
-    } else {
-        $fullname = $name
-    }
-    $result += @{ Name = $fullname; Type = $cls }
+$candidates = @()
+try {
+    $resolvedGroup = Get-WmiObject Win32_Group -Filter ("LocalAccount=True AND SID='" + $targetSid + "'") -ErrorAction Stop | Select-Object -First 1
+    if ($resolvedGroup -and $resolvedGroup.Name) { $candidates += "$($resolvedGroup.Name)" }
+} catch {}
+$candidates += @(__GROUP_CANDIDATES__)
+foreach ($groupName in ($candidates | Select-Object -Unique)) {
+    try {
+        $group = [ADSI]("WinNT://./" + $groupName + ",group")
+        $result = @()
+        foreach ($member in $group.psbase.Invoke("Members")) {
+            $cls  = $member.GetType().InvokeMember("Class",  'GetProperty', $null, $member, $null)
+            $name = $member.GetType().InvokeMember("Name",   'GetProperty', $null, $member, $null)
+            $path = $member.GetType().InvokeMember("ADsPath",'GetProperty', $null, $member, $null)
+            $domain = ""
+            if ($path -match "WinNT://([^/]+)/") { $domain = $matches[1] }
+            if ($domain -and $domain -ne $env:COMPUTERNAME) {
+                $fullname = "{0}\{1}" -f $domain, $name
+            } else {
+                $fullname = $name
+            }
+            $result += @{ Name = $fullname; Type = $cls }
+        }
+        if ($result) {
+            Write-LasJson -Value @($result) -Depth 3
+            return
+        }
+    } catch {}
 }
-$result | ConvertTo-Json -Compress -Depth 3
-""".replace("__GROUP_SID__", sid)
+""".replace("__GROUP_SID__", sid).replace("__GROUP_CANDIDATES__", ps_names)
                 raw = self._run_ps(session, script, computer)
                 members = self._extract_names(raw)
                 if members:
@@ -1450,7 +1513,7 @@ foreach ($g in $candidates) {
         $items = Get-LocalGroupMember -Group $g -ErrorAction Stop |
             Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={$_.ObjectClass}}, @{N='SID';E={if ($_.SID) { $_.SID.Value } else { '' }}}
         if ($items) {
-            $items | ConvertTo-Json -Compress
+            Write-LasJson -Value @($items)
             return
         }
     } catch {}
@@ -1472,15 +1535,31 @@ foreach ($g in $candidates) {
 $candidates = @(__GROUP_CANDIDATES__)
 foreach ($groupName in $candidates) {
     try {
-        $raw = net localgroup $groupName 2>&1
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "$env:SystemRoot\System32\net.exe"
+        $psi.Arguments = 'localgroup "' + $groupName.Replace('"', '\"') + '"'
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $oemEncoding = [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+        if ($psi.PSObject.Properties.Name -contains 'StandardOutputEncoding') {
+            $psi.StandardOutputEncoding = $oemEncoding
+            $psi.StandardErrorEncoding = $oemEncoding
+        }
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        [void]$process.Start()
+        $rawText = $process.StandardOutput.ReadToEnd() + [Environment]::NewLine + $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
         $started = $false; $res = @()
-        foreach ($line in $raw) {
+        foreach ($line in ($rawText -split "`r?`n")) {
             $s = "$line".Trim()
             if ($s -match '^-{3,}$') { $started = $true; continue }
             if ($started -and $s -and $s -notmatch 'command completed' -and $s -notmatch 'команда выполнена' -and $s -notmatch 'успешно завершена') { $res += $s }
         }
         if ($res) {
-            $res | ConvertTo-Json -Compress
+            Write-LasJson -Value @($res)
             return
         }
     } catch {}
@@ -3237,7 +3316,7 @@ async def api_remove_local_admin(request: Request):
         "$adsi=[ADSI]('WinNT://./'+$g+',group');"
         "$adsi.Remove('WinNT://'+$m.Replace('\\\\','/'))"
         "};"
-        "$o=@{ok=$true;machine=$env:COMPUTERNAME;account=$m;group=$g};$o|ConvertTo-Json -Compress"
+        "$o=@{ok=$true;machine=$env:COMPUTERNAME;account=$m;group=$g};Write-LasJson -Value $o"
     )
     if dry_run:
         return {"ok": True, "machine": machine, "account": account, "group": group, "dry_run": True}
