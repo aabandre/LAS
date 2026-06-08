@@ -209,7 +209,7 @@ def smart_decode(raw_bytes):
             return raw_bytes.decode(encoding)
         except (UnicodeDecodeError, ValueError):
             pass
-    return raw_bytes.decode("utf-8", errors="replace")
+    return repair_mojibake_text(raw_bytes.decode("utf-8", errors="replace"))
 
 
 PS_PAYLOAD_PREFIX = "LAS-UTF8-B64:"
