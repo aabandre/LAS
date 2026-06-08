@@ -117,6 +117,61 @@ os.makedirs(templates_dir, exist_ok=True)
 templates = Jinja2Templates(directory=templates_dir)
 
 
+def _cyrillic_score(text):
+    return sum(1 for ch in text if "\u0400" <= ch <= "\u04ff")
+
+
+def _mojibake_score(text):
+    cjk = sum(1 for ch in text if "\u3400" <= ch <= "\u9fff")
+    common_markers = sum(text.count(marker) for marker in ("Ð", "Ñ", "Р", "С", "Ђ", "Ѓ", "¤", "╨", "╤"))
+    return cjk + common_markers
+
+
+def repair_mojibake_text(text):
+    """Repair account names that were UTF-8 decoded with a legacy code page.
+
+    Some remote Windows hosts run PowerShell/native commands under a non-UTF-8
+    console code page. In that case Russian account names can arrive as valid
+    Unicode mojibake (often CJK-looking characters when UTF-8 bytes were read as
+    GBK/CP936), so byte-level decoding has already succeeded and cannot detect
+    the problem. Prefer a round-trip candidate only when it clearly restores
+    Cyrillic text.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+
+    original_cyr = _cyrillic_score(text)
+    original_bad = _mojibake_score(text)
+    if not original_bad:
+        return text
+
+    best = text
+    best_gain = 0
+    for wrong_encoding in ("cp936", "gbk", "cp1251", "cp866", "latin1"):
+        try:
+            candidate = text.encode(wrong_encoding).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError, ValueError):
+            continue
+        candidate_cyr = _cyrillic_score(candidate)
+        candidate_bad = _mojibake_score(candidate)
+        gain = (candidate_cyr - original_cyr) + (original_bad - candidate_bad)
+        if candidate_cyr >= max(2, original_cyr + 2) and gain > best_gain:
+            best = candidate
+            best_gain = gain
+
+    return best
+
+
+def repair_mojibake(value):
+    if isinstance(value, str):
+        return repair_mojibake_text(value)
+    if isinstance(value, list):
+        return [repair_mojibake(item) for item in value]
+    if isinstance(value, dict):
+        return {key: repair_mojibake(item) for key, item in value.items()}
+    return value
+
+
 def smart_decode(raw_bytes):
     if not raw_bytes:
         return ""
@@ -124,14 +179,21 @@ def smart_decode(raw_bytes):
         try:
             text = raw_bytes.decode(enc)
             if "\ufffd" not in text:
-                return text
+                return repair_mojibake_text(text)
         except (UnicodeDecodeError, ValueError):
             pass
-    return raw_bytes.decode("utf-8", errors="replace")
+    return repair_mojibake_text(raw_bytes.decode("utf-8", errors="replace"))
 
 
 PS_ENCODING_PREFIX = r"""
 $ErrorActionPreference = 'Stop'
+try {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [Console]::InputEncoding = $utf8NoBom
+    [Console]::OutputEncoding = $utf8NoBom
+    $OutputEncoding = $utf8NoBom
+    chcp.com 65001 > $null 2>&1
+} catch {}
 """
 
 
@@ -1230,6 +1292,7 @@ class Scanner:
         except (json.JSONDecodeError, ValueError):
             lines = decoded.splitlines()
             return [l.strip() for l in lines if l.strip()]
+        data = repair_mojibake(data)
         if isinstance(data, str):
             return [data]
         if isinstance(data, dict):
@@ -1249,7 +1312,7 @@ class Scanner:
                 name = str(item)
                 obj_type = "unknown"
                 sid = ""
-            name = name.strip()
+            name = repair_mojibake_text(name.strip())
             if sid.endswith("-500") and ("?" in name or "Ђ" in name or "¤" in name):
                 if "\\" in name:
                     host_part = name.split("\\", 1)[0].strip() or "LOCALHOST"
