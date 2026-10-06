@@ -3184,7 +3184,7 @@ async def summary_page(request: Request):
 @app.get("/api/summary")
 async def api_summary():
     if scanner._last_summary:
-        return scanner._last_summary
+        return JSONResponse(content=scanner._last_summary)
     return JSONResponse({"error": "No summary available"}, status_code=404)
 
 
