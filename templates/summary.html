@@ -872,7 +872,7 @@ function exportRemediationScript(){
             ';Write-Host ("{0} {1} [{2}] {3}" -f $computer,$member,$method,$status)}' +
             'catch{$err=$_.Exception.Message;' +
             '$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="FAILED";Status="Failed";Error=$err}' +
-            ';Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,$err)}}';
+            ';Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,$err)}';
 
         lines.push(psLine);
     }
