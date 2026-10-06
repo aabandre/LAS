@@ -102,6 +102,12 @@
         .rem-box h4{margin:0 0 6px;font-size:13px;color:#a94442}
         .rem-item{font-size:11px;padding:4px 0;border-bottom:1px dashed #f0caca}
         .rem-item:last-child{border-bottom:none}
+        .rem-progress{margin:10px 0;padding:8px;background:#fff;border:1px solid #e8dede;border-radius:6px}
+        .rem-progress-head{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:#555;margin-bottom:5px}
+        .rem-progress-track{height:8px;background:#eee;border-radius:999px;overflow:hidden}
+        .rem-progress-bar{height:100%;width:0;background:#4a90d9;transition:width .2s}
+        .rem-progress-current{font-size:11px;color:#666;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .rem-status{float:right;font-size:10px;font-weight:bold}.rem-status.pending{color:#888}.rem-status.running{color:#4a90d9}.rem-status.ok{color:#5cb85c}.rem-status.fail{color:#d9534f}
         .mini-danger{padding:3px 8px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px}
         .mini-danger:hover{background:#c0392b}
         .machine-detail h4{margin:0 0 8px;font-size:13px}
@@ -257,6 +263,7 @@
                         <input id="remUser" placeholder="User" style="padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:11px;width:140px">
                         <input id="remPass" type="password" placeholder="Password (optional)" style="padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:11px;width:180px">
                     </div>
+                    <div id="remProgress" class="rem-progress" style="display:none"><div class="rem-progress-head"><b data-i18n="rem_progress">Removal progress</b><span id="remProgressCount">0 / 0</span></div><div class="rem-progress-track"><div id="remProgressBar" class="rem-progress-bar"></div></div><div id="remProgressCurrent" class="rem-progress-current"></div></div>
                     <div id="remQueue"></div>
                     <div style="margin-top:8px">
                         <button class="mini-danger" onclick="runRemediationQueue()" data-i18n="rem_run_now">Run now</button>
@@ -347,7 +354,7 @@ en:{
     kpi_total_hosts:"Total hosts",kpi_success_rate:"Success rate",kpi_risky_hosts:"Risky hosts",kpi_unique_admins:"Unique admins",
     w_overview:"Overview",w_risk_focus:"Risk focus",w_perf:"Performance",w_data:"Data quality",
     col_actions:"Actions",rem_queue_title:"Remediation queue",rem_run_now:"Run now",rem_export:"Export .ps1",rem_clear:"Clear",
-    rem_empty:"Queue is empty",rem_nothing_selected:"Nothing selected",rem_confirm:"Run removal now on",rem_done:"Done",
+    rem_empty:"Queue is empty",rem_nothing_selected:"Nothing selected",rem_confirm:"Run removal now on",rem_done:"Done",rem_progress:"Removal progress",rem_pending:"Pending",rem_running:"Removing",rem_removed:"Removed",rem_absent:"Already absent",rem_failed:"Failed",
     view_label:"View:",view_compact:"Compact",view_comfortable:"Comfortable",queue_selected:"Queue selected",
     sev_all:"All",sev_critical:"Critical",sev_high:"High",sev_medium:"Medium",sev_low:"Low",act_queue:"Queue",kpi_coverage:"Coverage",kpi_page:"Page",
     txt_success:"Success",txt_errors:"Errors",txt_methods:"Methods",txt_hosts:"hosts",txt_success_rate:"Success rate",txt_error_rate:"Error rate",txt_risk_coverage:"Risk coverage",txt_main_method:"Main method"
@@ -399,7 +406,7 @@ ru:{
     kpi_total_hosts:"\u0412\u0441\u0435\u0433\u043e \u0445\u043e\u0441\u0442\u043e\u0432",kpi_success_rate:"\u0423\u0441\u043f\u0435\u0448\u043d\u044b\u0445, %",kpi_risky_hosts:"\u0420\u0438\u0441\u043a\u043e\u0432\u044b\u0435 \u0445\u043e\u0441\u0442\u044b",kpi_unique_admins:"\u0423\u043d\u0438\u043a. \u0430\u0434\u043c\u0438\u043d\u044b",
     w_overview:"\u041e\u0431\u0437\u043e\u0440",w_risk_focus:"\u0424\u043e\u043a\u0443\u0441 \u043d\u0430 \u0440\u0438\u0441\u043a\u0430\u0445",w_perf:"\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0438\u0442.",w_data:"\u041a\u0430\u0447\u0435\u0441\u0442\u0432\u043e \u0434\u0430\u043d\u043d\u044b\u0445",
     col_actions:"\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f",rem_queue_title:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u0438\u0441\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f",rem_run_now:"\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c",rem_export:"\u042d\u043a\u0441\u043f\u043e\u0440\u0442 .ps1",rem_clear:"\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c",
-    rem_empty:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u0443\u0441\u0442\u0430",rem_nothing_selected:"\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043e",rem_confirm:"\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0434\u043b\u044f",rem_done:"\u0413\u043e\u0442\u043e\u0432\u043e",
+    rem_empty:"\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u0443\u0441\u0442\u0430",rem_progress:"\u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u044f",rem_pending:"\u041e\u0436\u0438\u0434\u0430\u0435\u0442",rem_running:"\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435",rem_removed:"\u0423\u0434\u0430л\u0435н",rem_absent:"\u0423\u0436\u0435 \u043d\u0435\u0442",rem_failed:"\u041e\u0448\u0438\u0431\u043a\u0430",rem_nothing_selected:"\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043e",rem_confirm:"\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0434\u043b\u044f",rem_done:"\u0413\u043e\u0442\u043e\u0432\u043e",
     view_label:"\u0412\u0438\u0434:",view_compact:"\u041a\u043e\u043c\u043f\u0430\u043a\u0442",view_comfortable:"\u0423\u0434\u043e\u0431\u043d\u044b\u0439",queue_selected:"\u0412 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0435",
     sev_all:"\u0412\u0441\u0435",sev_critical:"\u041a\u0440\u0438\u0442.",sev_high:"\u0412\u044b\u0441\u043e\u043a.",sev_medium:"\u0421\u0440\u0435\u0434\u043d.",sev_low:"\u041d\u0438\u0437\u043a.",act_queue:"\u0412 \u043e\u0447\u0435\u0440\u0435\u0434\u044c",kpi_coverage:"\u041e\u0445\u0432\u0430\u0442",kpi_page:"\u0421\u0442\u0440.",
     txt_success:"\u0423\u0441\u043f\u0435\u0445",txt_errors:"\u041e\u0448\u0438\u0431\u043a\u0438",txt_methods:"\u041c\u0435\u0442\u043e\u0434\u044b",txt_hosts:"\u0445\u043e\u0441\u0442\u043e\u0432",txt_success_rate:"\u0414\u043e\u043b\u044f \u0443\u0441\u043f\u0435\u0445\u0430",txt_error_rate:"\u0414\u043e\u043b\u044f \u043e\u0448\u0438\u0431\u043e\u043a",txt_risk_coverage:"\u041f\u043e\u043a\u0440\u044b\u0442\u0438\u0435 \u0440\u0438\u0441\u043a\u0430",txt_main_method:"\u041e\u0441\u043d. \u043c\u0435\u0442\u043e\u0434"
@@ -747,7 +754,7 @@ function queueAdminForRemoval(account){
         var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|"),machines=[];
         for(var mi=0;mi<machinesRaw.length;mi++){if(machinesRaw[mi])machines.push(machinesRaw[mi]);}
         for(var j=0;j<machines.length;j++){
-            remediationQueue.push({machine:machines[j],account:account,group:"Administrators"});
+            remediationQueue.push({machine:machines[j],account:account,group:"Administrators",status:"pending"});
         }
         break;
     }
@@ -760,7 +767,7 @@ function queueSelectedAdmins(){
         var chk=rows[i].querySelector(".admin-row-chk"); if(!chk||!chk.checked)continue;
         var account=rows[i].getAttribute("data-account")||"";
         var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|");
-        for(var j=0;j<machinesRaw.length;j++){if(machinesRaw[j]){remediationQueue.push({machine:machinesRaw[j],account:account,group:"Administrators"});added++;}}
+        for(var j=0;j<machinesRaw.length;j++){if(machinesRaw[j]){remediationQueue.push({machine:machinesRaw[j],account:account,group:"Administrators",status:"pending"});added++;}}
     }
     renderRemediationQueue();
     if(!added)alert(t("rem_nothing_selected"));
@@ -778,7 +785,7 @@ function renderRemediationQueue(){
     var uniq={},arr=[],i,k,h="";
     for(i=0;i<remediationQueue.length;i++){k=remediationQueue[i].machine+"|"+remediationQueue[i].account;if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
     remediationQueue=arr;
-    for(i=0;i<arr.length;i++)h+='<div class="rem-item"><b>'+escapeHtml(arr[i].machine)+'</b> → '+escapeHtml(arr[i].account)+'</div>';
+    for(i=0;i<arr.length;i++){var r=arr[i],st=r.status||"pending",label=st==="ok"?(r.resultStatus||t("rem_removed")):st==="fail"?t("rem_failed"):st==="running"?t("rem_running"):t("rem_pending");h+='<div class="rem-item"><b>'+escapeHtml(r.machine)+'</b> → '+escapeHtml(r.account)+' <span class="rem-status '+st+'">'+escapeHtml(label)+'</span></div>';}
     box.innerHTML=h;
 }
 function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
@@ -852,8 +859,7 @@ function exportRemediationScript(){
     for(var i=0;i<remediationQueue.length;i++){
         var r=remediationQueue[i];
         var m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=r.account.replace(/'/g,"''");
-        lines.push('$computer=' + "'" + m + "'; $group=" + "'" + g + "'; $member=" + "'" + a + "'");
-        lines.push('try{$status=Remove-LasMemberWinRm $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="WinRM";Status=$status;Error=""};Write-Host ("OK {0} {1} [WinRM] {2}" -f $computer,$member,$status)}catch{$winrmError=$_.Exception.Message;try{$status=Remove-LasMemberRpc $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="ADSI-RPC";Status=$status;Error=$winrmError};Write-Host ("OK {0} {1} [ADSI-RPC] {2}" -f $computer,$member,$status)}catch{$err=$_.Exception.Message;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="FAILED";Status="Failed";Error=($winrmError+" | ADSI-RPC: "+$err)};Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,($winrmError+" | ADSI-RPC: "+$err))}}');
+        lines.push('try{$computer=' + "'" + m + "'; $group=" + "'" + g + "'; $member=" + "'" + a + "';try{$status=Remove-LasMemberWinRm $computer $group $member;$method=" + '"' + "WinRM" + '"' + "}catch{$winrmError=$_.Exception.Message;try{$status=Remove-LasMemberRpc $computer $group $member;$method=" + '"' + "ADSI-RPC" + '"' + "}catch{throw ($winrmError+" + '"' + " | ADSI-RPC: " + '"' + "+$_.Exception.Message)}};$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method=$method;Status=$status;Error=if($winrmError){$winrmError}else{""}};Write-Host (" + '"' + "{0} {1} [{2}] {3}" + '"' + " -f $computer,$member,$method,$status)}catch{$err=$_.Exception.Message;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method=" + '"' + "FAILED" + '"' + ";Status=" + '"' + "Failed" + '"' + ";Error=$err};Write-Warning (" + '"' + "FAILED {0} {1}: {2}" + '"' + " -f $computer,$member,$err)}}');
     }
     lines.push('$results | Format-Table -AutoSize');
     lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $PWD "las-remediation-results.csv")');
@@ -864,22 +870,43 @@ function exportRemediationScript(){
 function runRemediationQueue(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
     if(!confirm(t("rem_confirm")+" "+remediationQueue.length+"?"))return;
-    var i=0,ok=0,fail=0,errs=[];
+    var total=remediationQueue.length,i=0,ok=0,fail=0,errs=[];
+    $("remProgress").style.display="block";
+    function updateProgress(current){
+        var done=i,pct=total?Math.round(done*100/total):0;
+        $("remProgressCount").innerHTML=done+" / "+total;
+        $("remProgressBar").style.width=pct+"%";
+        $("remProgressCurrent").innerHTML=current||"";
+        renderRemediationQueue();
+    }
+    updateProgress("");
     function step(){
-        if(i>=remediationQueue.length){alert(t("rem_done")+". OK: "+ok+", Failed: "+fail+(errs.length?("\n"+errs.slice(0,5).join("\n")):""));return;}
-        var r=remediationQueue[i++];
+        if(i>=total){
+            $("remProgressCurrent").innerHTML=t("rem_done")+" — OK: "+ok+", Failed: "+fail;
+            $("remProgressBar").style.width="100%";
+            renderRemediationQueue();
+            alert(t("rem_done")+". OK: "+ok+", Failed: "+fail+(errs.length?("\n"+errs.slice(0,5).join("\n")):""));
+            return;
+        }
+        var idx=i++,r=remediationQueue[idx];r.status="running";
+        updateProgress(r.machine+" → "+r.account);
         var x=new XMLHttpRequest();
         x.open("POST","/api/remediate/remove-local-admin",true);
         x.setRequestHeader("Content-Type","application/json");
         x.onreadystatechange=function(){
             if(x.readyState!==4)return;
-            if(x.status===200){ok++;try{var rr=JSON.parse(x.responseText||"{}");var st=rr.status||"Removed";addLog((r.machine+" "+r.account+" ["+(rr.method||"WinRM")+"] "+st),"log-ok",r.machine,false,null);}catch(e){}}else{fail++;try{var er=JSON.parse(x.responseText||"{}");errs.push((r.machine+" "+r.account+": "+(er.error||x.statusText||x.status)));}catch(e){errs.push(r.machine+" "+r.account+": "+x.status);}}
+            if(x.status===200){
+                ok++;
+                try{var rr=JSON.parse(x.responseText||"{}"),st=rr.status||"Removed";r.status=(st==="Failed"||st==="StillPresent")?"fail":"ok";r.resultStatus=st;addLog((r.machine+" "+r.account+" ["+(rr.method||"WinRM")+"] "+st),"log-ok",r.machine,false,null);}catch(e){r.status="ok";r.resultStatus="Removed";}
+            }else{
+                fail++;r.status="fail";
+                try{var er=JSON.parse(x.responseText||"{}");errs.push((r.machine+" "+r.account+": "+(er.error||x.statusText||x.status)));}catch(e){errs.push(r.machine+" "+r.account+": "+x.status);}
+            }
+            updateProgress(r.machine+" → "+r.account+" — "+(r.resultStatus||t("rem_failed")));
             step();
         };
-        x.send(JSON.stringify({
-            machine:r.machine,account:r.account,group:r.group,
-            domain:val("remDomain"),username:val("remUser"),password:val("remPass")
-        }));
+        x.onerror=function(){fail++;r.status="fail";errs.push(r.machine+" "+r.account+": network error");updateProgress(r.machine+" → "+r.account+" — "+t("rem_failed"));step();};
+        x.send(JSON.stringify({machine:r.machine,account:r.account,group:r.group,domain:val("remDomain"),username:val("remUser"),password:val("remPass")}));
     }
     step();
 }
