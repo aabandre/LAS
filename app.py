@@ -3407,7 +3407,7 @@ async def api_remove_local_admin(request: Request):
 
         if auth_user and auth_pass:
             username = auth_user
-            if auth_domain and ("\" not in username and "@" not in username):
+            if auth_domain and ("\\" not in username and "@" not in username):
                 username = auth_domain + "\" + username
             port = 5986 if use_ssl else 5985
             scheme = "https" if use_ssl else "http"
