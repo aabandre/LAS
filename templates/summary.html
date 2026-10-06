@@ -784,27 +784,62 @@ function renderRemediationQueue(){
 function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
 function exportRemediationScript(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
-    var lines=['# Generated remediation script v2 (ADSI remote mode)','Set-StrictMode -Version Latest','$ErrorActionPreference = "Stop"'];
+    var lines=[
+        '# LAS remediation v3 - WinRM + native RPC fallback + verification',
+        'Set-StrictMode -Version Latest',
+        '$ErrorActionPreference = "Stop"',
+        '',
+        'function Test-LasMember {',
+        '  param([string]$Computer,[string]$Group,[string]$Member)',
+        '  try {',
+        '    $items = Get-CimInstance -ClassName Win32_GroupUser -ComputerName $Computer -ErrorAction Stop',
+        '    $short = ($Member -split "\\\\")[-1]',
+        '    foreach($item in $items){',
+        '      if($item.GroupComponent -match ("Name=" + [regex]::Escape($Group)) -and $item.PartComponent -match ("Name=" + [regex]::Escape($short))){ return $true }',
+        '    }',
+        '    return $false',
+        '  } catch { return $null }',
+        '}',
+        '',
+        'function Remove-LasMemberRpc {',
+        '  param([string]$Computer,[string]$Group,[string]$Member)',
+        '  $short = ($Member -split "\\\\")[-1]',
+        '  $out = & "$env:SystemRoot\\System32\\net.exe" localgroup $Group 2>&1',
+        '  if($LASTEXITCODE -ne 0){ throw ("net localgroup failed: " + ($out -join " ")) }',
+        '  $found = $false',
+        '  foreach($line in $out){ $s="$line".Trim(); if($s -ieq $Member -or $s -ieq $short -or $s -match ("\\\\" + [regex]::Escape($short) + "$")){$found=$true;break} }',
+        '  if(-not $found){ return "AlreadyAbsent" }',
+        '  $out = & "$env:SystemRoot\\System32\\net.exe" localgroup $Group $Member /delete 2>&1',
+        '  if($LASTEXITCODE -ne 0){ $out = & "$env:SystemRoot\\System32\\net.exe" localgroup $Group $short /delete 2>&1 }',
+        '  if($LASTEXITCODE -ne 0){ throw ("net localgroup delete failed: " + ($out -join " ")) }',
+        '  $verify=Test-LasMember $Computer $Group $Member',
+        '  if($verify -eq $true){throw "Member is still present after RPC deletion"}',
+        '  if($verify -eq $false){return "Removed"}',
+        '  return "RemovedUnverified"',
+        '}',
+        '',
+        'function Remove-LasMemberWinRm {',
+        '  param([string]$Computer,[string]$Group,[string]$Member)',
+        '  $script={param($g,$m);$ErrorActionPreference="Stop";if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){Remove-LocalGroupMember -Group $g -Member $m -ErrorAction Stop}else{$adsi=[ADSI]("WinNT://./"+$g+",group");try{$adsi.Remove("WinNT://"+$m.Replace("\\\\","/"))}catch{$short=$m.Split("\\\\")[-1];$adsi.Remove("WinNT://"+$short)}}}',
+        '  Invoke-Command -ComputerName $Computer -ScriptBlock $script -ArgumentList $Group,$Member -ErrorAction Stop',
+        '  $verify=Test-LasMember $Computer $Group $Member',
+        '  if($verify -eq $true){throw "Member is still present after WinRM deletion"}',
+        '  if($verify -eq $false){return "Removed"}',
+        '  return "RemovedUnverified"',
+        '}',
+        '',
+        '$results=@()'
+    ];
     for(var i=0;i<remediationQueue.length;i++){
         var r=remediationQueue[i];
-        var m=r.machine.replace(/"/g,'`"'),g=r.group.replace(/"/g,'`"'),a=r.account.replace(/"/g,'`"');
-        lines.push('Try {');
-        lines.push('  Invoke-Command -ComputerName "'+m+'" -ScriptBlock {');
-        lines.push('    param($grp,$mem)');
-        lines.push('    if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){');
-        lines.push('      Remove-LocalGroupMember -Group $grp -Member $mem -ErrorAction Stop; return');
-        lines.push('    }');
-        lines.push('    $adsi=[ADSI]("WinNT://./"+$grp+",group")');
-        lines.push('    try {$adsi.Remove("WinNT://"+$mem.Replace("\\\\","/")); return} catch {}');
-        lines.push('    $short=$mem.Split("\\\\")[-1]; $adsi.Remove("WinNT://"+$short)');
-        lines.push('  } -ArgumentList "'+g+'","'+a+'" -ErrorAction Stop');
-        lines.push('  Write-Host "OK '+m+' '+a+'"');
-        lines.push('} Catch {');
-        lines.push('  Write-Warning "Failed '+m+' '+a+': $($_.Exception.Message)"');
-        lines.push('}');
+        var m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=r.account.replace(/'/g,"''");
+        lines.push('$computer=' + "'" + m + "'; $group=" + "'" + g + "'; $member=" + "'" + a + "'");
+        lines.push('try{$status=Remove-LasMemberWinRm $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="WinRM";Status=$status;Error=""};Write-Host ("OK {0} {1} [WinRM] {2}" -f $computer,$member,$status)}catch{$winrmError=$_.Exception.Message;try{$status=Remove-LasMemberRpc $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="RPC";Status=$status;Error=$winrmError};Write-Host ("OK {0} {1} [RPC] {2}" -f $computer,$member,$status)}catch{$err=$_.Exception.Message;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="FAILED";Status="Failed";Error=($winrmError+" | RPC: "+$err)};Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,($winrmError+" | RPC: "+$err))}}');
     }
-    var blob=new Blob([lines.join('\n')],{type:'text/plain;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement("a");
-    a.href=url;a.download="remediate_local_admins_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";document.body.appendChild(a);a.click();
+    lines.push('$results | Format-Table -AutoSize');
+    lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $PWD "las-remediation-results.csv")');
+    var blob=new Blob([lines.join("\\n")],{type:"text/plain;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download="remediate_local_admins_v3_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";document.body.appendChild(a);a.click();
     setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
 }
 function runRemediationQueue(){
