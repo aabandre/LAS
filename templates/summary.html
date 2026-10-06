@@ -862,18 +862,17 @@ function exportRemediationScript(){
             g=r.group.replace(/'/g,"''"),
             a=r.account.replace(/'/g,"''");
 
-        var psLine=[
-            "try{$computer='",m,"'; $group='",g,"'; $member='",a,"';$winrmError=\"\";",
-            "try{$status=Remove-LasMemberWinRm $computer $group $member;$method=\"WinRM\"}",
-            "catch{$winrmError=$_.Exception.Message;",
-            "try{$status=Remove-LasMemberRpc $computer $group $member;$method=\"ADSI-RPC\"}",
-            "catch{throw ($winrmError+\" | ADSI-RPC: \"+$_.Exception.Message)}}",
-            ";$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method=$method;Status=$status;Error=$(if($winrmError){$winrmError}else{\"\"})}",
-            ";Write-Host (\"{0} {1} [{2}] {3}\" -f $computer,$member,$method,$status)}",
-            "catch{$err=$_.Exception.Message;",
-            "$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method=\"FAILED\";Status=\"Failed\";Error=$err}",
-            ";Write-Warning (\"FAILED {0} {1}: {2}\" -f $computer,$member,$err)}}"
-        ].join("");
+        var psLine =
+            'try{$computer=\'' + m + '\'; $group=\'' + g + '\'; $member=\'' + a + '\';$winrmError="";' +
+            'try{$status=Remove-LasMemberWinRm $computer $group $member;$method="WinRM"}' +
+            'catch{$winrmError=$_.Exception.Message;' +
+            'try{$status=Remove-LasMemberRpc $computer $group $member;$method="ADSI-RPC"}' +
+            'catch{throw ($winrmError+" | ADSI-RPC: "+$_.Exception.Message)}}' +
+            ';$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method=$method;Status=$status;Error=$(if($winrmError){$winrmError}else{""})}' +
+            ';Write-Host ("{0} {1} [{2}] {3}" -f $computer,$member,$method,$status)}' +
+            'catch{$err=$_.Exception.Message;' +
+            '$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="FAILED";Status="Failed";Error=$err}' +
+            ';Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,$err)}}';
 
         lines.push(psLine);
     }
