@@ -3199,7 +3199,7 @@ async def api_load_summary(filename: str):
             data = json.load(f)
         scanner._last_summary = data
         scanner._last_summary_file = safe
-        return data
+        return JSONResponse(content=data)
     except Exception as e:
         raise HTTPException(500, str(e))
 
