@@ -659,7 +659,7 @@ function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineF
     for(var i=0;i<rows.length;i++){var row=rows[i],sd=row.getAttribute("data-search")||"",ila=row.getAttribute("data-is-la")==="1",ibi=row.getAttribute("data-is-bi")==="1",icu=row.getAttribute("data-is-custom")==="1",hv=row.getAttribute("data-has-via")==="1",ig=row.getAttribute("data-is-group")==="1",idm=row.getAttribute("data-is-domain")==="1";
         var mds=row.getAttribute("data-machines")||"";
         var show=true;if(st&&sd.indexOf(st)===-1)show=false;if(show&&mf&&mds.indexOf(mf)===-1)show=false;if(show&&hLA&&ila)show=false;if(show&&hBI&&(ibi||ila))show=false;if(show&&oCU&&!icu)show=false;if(show&&oVG&&!hv)show=false;if(show&&hGR&&ig)show=false;if(show&&oLG&&hv&&idm)show=false;
-        row.style.display=show?"":"none";if(show){vis++;matched.push(row)}}
+        row.setAttribute("data-filtered",show?"1":"0");row.style.display=show?"":"none";if(show){vis++;matched.push(row)}}
     var pageSize=parseInt(val("adminPageSize")||"50",10);if(!pageSize||pageSize<1)pageSize=50;
     var totalPages=Math.max(1,Math.ceil(matched.length/pageSize));
     if(adminCurrentPage>totalPages)adminCurrentPage=totalPages;
@@ -937,26 +937,48 @@ function sortTbl(tid,col){var table=$(tid),tbody=table.getElementsByTagName("tbo
 
 function exportFilteredAdminsCSV(){
     var body=$("adminBody"); if(!body){alert("No table");return;}
-    var rows=body.getElementsByTagName("tr"),lines=["account,type,count,via_group,machines"],i;
-    for(i=0;i<rows.length;i++){
-        if(rows[i].style.display==="none") continue;
-        var tds=rows[i].getElementsByTagName("td");
-        if(!tds||tds.length<6) continue;
-        var account=(tds[1].innerText||"").replace(/\s+\w+\s*$/,"").trim();
-        var typ=(tds[2].innerText||"").trim();
-        var count=(tds[3].innerText||"").trim();
-        var via=(tds[4].innerText||"").replace(/\s+/g," ").trim();
-        var machines=(tds[5].innerText||"").replace(/\s+/g," ").trim();
-        var vals=[account,typ,count,via,machines];
-        for(var j=0;j<vals.length;j++){vals[j]='"'+String(vals[j]).replace(/"/g,'""')+'"';}
+    var rows=body.getElementsByTagName("tr"),lines=[
+        "account,type,count,via_group,machines"
+    ];
+    for(var i=0;i<rows.length;i++){
+        var row=rows[i];
+        // Export the logical filtered set, not only the currently visible page.
+        // Pagination changes style.display, which previously caused machines/rows
+        // on other pages to disappear from the export.
+        if(row.getAttribute("data-filtered")!=="1") continue;
+
+        var tds=row.getElementsByTagName("td");
+        if(!tds||tds.length<7) continue;
+
+        var account=row.getAttribute("data-account")||"";
+        var typ=(tds[3].innerText||"").replace(/\s+/g," ").trim();
+        var count=(tds[4].innerText||"").replace(/\s+/g," ").trim();
+        var via=(tds[5].innerText||"").replace(/\s+/g," ").trim();
+
+        var machines=[];
+        var raw=row.getAttribute("data-machines-raw")||"";
+        if(raw){
+            try{machines=decodeURIComponent(raw).split("|").filter(function(x){return x!=="";});}catch(e){}
+        }
+        if(!machines.length){
+            var cell=tds[6];
+            var title=cell?cell.getAttribute("title"):"";
+            if(title) machines=title.split(/,\s*/).filter(function(x){return x!=="";});
+        }
+
+        var vals=[account,typ,count,via,machines.join(", ")];
+        for(var j=0;j<vals.length;j++){
+            vals[j]='"'+String(vals[j]).replace(/"/g,'""')+'"';
+        }
         lines.push(vals.join(","));
     }
-    var csv=lines.join("\n");
+
+    // UTF-8 BOM makes Cyrillic open correctly in Excel.
+    var csv="\\uFEFF"+lines.join("\n");
     var blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
     var url=URL.createObjectURL(blob),a=document.createElement("a");
-    a.href=url;a.download="filtered_admins_"+new Date().toISOString().replace(/[:.]/g,"-")+".csv";
-    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+    a.href=url;
+    a.download="filtered_admins_"+new Date().toISOString().replace(/[:.]/g,"-")+".csv";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
-</script>
-</body>
-</html>
