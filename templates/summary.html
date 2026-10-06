@@ -785,34 +785,54 @@ function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
 function exportRemediationScript(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
     var lines=[
-        '# LAS remediation v3 - WinRM + native RPC fallback + verification',
+        '# LAS remediation v4 - WinRM + remote ADSI/RPC fallback + verification',
         'Set-StrictMode -Version Latest',
         '$ErrorActionPreference = "Stop"',
+        '',
+        'function Get-LasRemoteGroup {',
+        '  param([string]$Computer,[string]$Group)',
+        '  $path = "WinNT://" + $Computer + "/" + $Group + ",group"',
+        '  return [ADSI]$path',
+        '}',
         '',
         'function Test-LasMember {',
         '  param([string]$Computer,[string]$Group,[string]$Member)',
         '  try {',
-        '    $out = & "$env:SystemRoot\\System32\\net.exe" localgroup $Group 2>&1',
-        '    if($LASTEXITCODE -ne 0){ return $null }',
+        '    $groupObj = Get-LasRemoteGroup $Computer $Group',
         '    $short = ($Member -split "\\\\")[-1]',
-        '    foreach($line in $out){ $s="$line".Trim(); if($s -ieq $Member -or $s -ieq $short -or $s -match ("\\\\" + [regex]::Escape($short) + "$")){ return $true } }',
+        '    foreach($item in @($groupObj.psbase.Invoke("Members"))){',
+        '      $name = $item.GetType().InvokeMember("Name","GetProperty",$null,$item,$null)',
+        '      $path = $item.GetType().InvokeMember("ADsPath","GetProperty",$null,$item,$null)',
+        '      $domain = ""',
+        '      if("$path" -match "WinNT://([^/]+)/"){ $domain=$matches[1] }',
+        '      $full = if($domain -and $domain -ne $Computer){$domain + "\\" + $name}else{$name}',
+        '      if($full -ieq $Member -or "$name" -ieq $short){return $true}',
+        '    }',
         '    return $false',
         '  } catch { return $null }',
         '}',
         '',
         'function Remove-LasMemberRpc {',
         '  param([string]$Computer,[string]$Group,[string]$Member)',
+        '  $groupObj = Get-LasRemoteGroup $Computer $Group',
         '  $short = ($Member -split "\\\\")[-1]',
-        '  $out = & "$env:SystemRoot\\System32\\net.exe" localgroup $Group 2>&1',
-        '  if($LASTEXITCODE -ne 0){ throw ("net localgroup failed: " + ($out -join " ")) }',
-        '  $found = $false',
-        '  foreach($line in $out){ $s="$line".Trim(); if($s -ieq $Member -or $s -ieq $short -or $s -match ("\\\\" + [regex]::Escape($short) + "$")){$found=$true;break} }',
-        '  if(-not $found){ return "AlreadyAbsent" }',
-        '  $out = & "$env:SystemRoot\\System32\\net.exe" localgroup $Group $Member /delete 2>&1',
-        '  if($LASTEXITCODE -ne 0){ $out = & "$env:SystemRoot\\System32\\net.exe" localgroup $Group $short /delete 2>&1 }',
-        '  if($LASTEXITCODE -ne 0){ throw ("net localgroup delete failed: " + ($out -join " ")) }',
+        '  $targetPath = "WinNT://" + (($Member -replace "\\\\","/"))',
+        '  $removed = $false',
+        '  foreach($item in @($groupObj.psbase.Invoke("Members"))){',
+        '    $name = $item.GetType().InvokeMember("Name","GetProperty",$null,$item,$null)',
+        '    $path = $item.GetType().InvokeMember("ADsPath","GetProperty",$null,$item,$null)',
+        '    $domain = ""',
+        '    if("$path" -match "WinNT://([^/]+)/"){ $domain=$matches[1] }',
+        '    $full = if($domain -and $domain -ne $Computer){$domain + "\\" + $name}else{$name}',
+        '    if($full -ieq $Member -or "$name" -ieq $short){',
+        '      $groupObj.Remove($path)',
+        '      $removed = $true',
+        '      break',
+        '    }',
+        '  }',
+        '  if(-not $removed){return "AlreadyAbsent"}',
         '  $verify=Test-LasMember $Computer $Group $Member',
-        '  if($verify -eq $true){throw "Member is still present after RPC deletion"}',
+        '  if($verify -eq $true){throw "Member is still present after remote ADSI deletion"}',
         '  if($verify -eq $false){return "Removed"}',
         '  return "RemovedUnverified"',
         '}',
@@ -833,12 +853,12 @@ function exportRemediationScript(){
         var r=remediationQueue[i];
         var m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=r.account.replace(/'/g,"''");
         lines.push('$computer=' + "'" + m + "'; $group=" + "'" + g + "'; $member=" + "'" + a + "'");
-        lines.push('try{$status=Remove-LasMemberWinRm $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="WinRM";Status=$status;Error=""};Write-Host ("OK {0} {1} [WinRM] {2}" -f $computer,$member,$status)}catch{$winrmError=$_.Exception.Message;try{$status=Remove-LasMemberRpc $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="RPC";Status=$status;Error=$winrmError};Write-Host ("OK {0} {1} [RPC] {2}" -f $computer,$member,$status)}catch{$err=$_.Exception.Message;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="FAILED";Status="Failed";Error=($winrmError+" | RPC: "+$err)};Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,($winrmError+" | RPC: "+$err))}}');
+        lines.push('try{$status=Remove-LasMemberWinRm $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="WinRM";Status=$status;Error=""};Write-Host ("OK {0} {1} [WinRM] {2}" -f $computer,$member,$status)}catch{$winrmError=$_.Exception.Message;try{$status=Remove-LasMemberRpc $computer $group $member;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="ADSI-RPC";Status=$status;Error=$winrmError};Write-Host ("OK {0} {1} [ADSI-RPC] {2}" -f $computer,$member,$status)}catch{$err=$_.Exception.Message;$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="FAILED";Status="Failed";Error=($winrmError+" | ADSI-RPC: "+$err)};Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,($winrmError+" | ADSI-RPC: "+$err))}}');
     }
     lines.push('$results | Format-Table -AutoSize');
     lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $PWD "las-remediation-results.csv")');
     var blob=new Blob([lines.join("\\n")],{type:"text/plain;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");
-    a.href=url;a.download="remediate_local_admins_v3_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";document.body.appendChild(a);a.click();
+    a.href=url;a.download="remediate_local_admins_v4_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";document.body.appendChild(a);a.click();
     setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
 }
 function runRemediationQueue(){
