@@ -873,7 +873,7 @@ function runRemediationQueue(){
         x.setRequestHeader("Content-Type","application/json");
         x.onreadystatechange=function(){
             if(x.readyState!==4)return;
-            if(x.status===200)ok++;else{fail++;try{var er=JSON.parse(x.responseText||"{}");errs.push((r.machine+" "+r.account+": "+(er.error||x.statusText||x.status)));}catch(e){errs.push(r.machine+" "+r.account+": "+x.status);}}
+            if(x.status===200){ok++;try{var rr=JSON.parse(x.responseText||"{}");var st=rr.status||"Removed";addLog((r.machine+" "+r.account+" ["+(rr.method||"WinRM")+"] "+st),"log-ok",r.machine,false,null);}catch(e){}}else{fail++;try{var er=JSON.parse(x.responseText||"{}");errs.push((r.machine+" "+r.account+": "+(er.error||x.statusText||x.status)));}catch(e){errs.push(r.machine+" "+r.account+": "+x.status);}}
             step();
         };
         x.send(JSON.stringify({
