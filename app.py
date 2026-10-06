@@ -3294,6 +3294,87 @@ async def api_metrics():
     return metrics.get_stats()
 
 
+def _remediation_account_key(value):
+    text = str(value or "").strip().lower()
+    if "\\" in text:
+        text = text.split("\\", 1)[1]
+    return text
+
+
+def _verify_local_group_member_rpc(machine, group, account):
+    if not WIN32NET_AVAILABLE:
+        return None
+    server = "\\\\" + str(machine).split(".")[0]
+    target = str(account or "").strip().lower()
+    try:
+        resume = 0
+        while True:
+            data, total, resume = win32net.NetLocalGroupGetMembers(server, group, 2, resume, 4096)
+            for item in data:
+                name = str(item.get("domainandname") or "").strip()
+                sid = str(item.get("sid") or "").strip()
+                if target.startswith("s-") and sid.lower() == target:
+                    return True
+                if name.lower() == target or _remediation_account_key(name) == _remediation_account_key(target):
+                    return True
+            if not resume:
+                break
+    except Exception as e:
+        logger.debug("RPC remediation verification failed for %s/%s/%s: %s", machine, group, account, e)
+        return None
+    return False
+
+
+def _remove_local_group_member_rpc(machine, group, account):
+    if not WIN32NET_AVAILABLE:
+        return None
+
+    server = "\\\\" + str(machine).split(".")[0]
+    requested = str(account or "").strip()
+    resolved_name = None
+    try:
+        resume = 0
+        while True:
+            data, total, resume = win32net.NetLocalGroupGetMembers(server, group, 2, resume, 4096)
+            for item in data:
+                name = str(item.get("domainandname") or "").strip()
+                sid = str(item.get("sid") or "").strip()
+                if not name:
+                    continue
+                if (
+                    requested.lower().startswith("s-") and sid.lower() == requested.lower()
+                ) or (
+                    name.lower() == requested.lower()
+                    or _remediation_account_key(name) == _remediation_account_key(requested)
+                ):
+                    resolved_name = name
+                    break
+            if resolved_name or not resume:
+                break
+
+        if not resolved_name:
+            return {"ok": True, "method": "RPC", "status": "AlreadyAbsent"}
+
+        win32net.NetLocalGroupDelMembers(
+            server, group, 3, [{"domainandname": resolved_name}]
+        )
+        verified = _verify_local_group_member_rpc(machine, group, requested)
+        if verified is False:
+            return {"ok": True, "method": "RPC", "status": "Removed", "account": resolved_name}
+        if verified is True:
+            return {
+                "ok": False, "method": "RPC", "status": "StillPresent",
+                "account": resolved_name,
+                "error": "Member is still present after RPC removal",
+            }
+        return {
+            "ok": True, "method": "RPC", "status": "RemovedUnverified",
+            "account": resolved_name,
+        }
+    except Exception as e:
+        return {"ok": False, "method": "RPC", "status": "Failed", "error": str(e)[:500]}
+
+
 @app.post("/api/remediate/remove-local-admin")
 async def api_remove_local_admin(request: Request):
     body = await request.json()
@@ -3305,26 +3386,29 @@ async def api_remove_local_admin(request: Request):
     auth_user = str(body.get("username") or "").strip()
     auth_pass = str(body.get("password") or "")
     auth_domain = str(body.get("domain") or "").strip()
+
     if not machine or not account:
         return JSONResponse({"error": "machine and account are required"}, status_code=400)
-
-    script = (
-        "$g='" + group.replace("'", "''") + "';$m='" + account.replace("'", "''") + "';"
-        "if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){"
-        "Remove-LocalGroupMember -Group $g -Member $m -ErrorAction Stop"
-        "}else{"
-        "$adsi=[ADSI]('WinNT://./'+$g+',group');"
-        "$adsi.Remove('WinNT://'+$m.Replace('\\\\','/'))"
-        "};"
-        "$o=@{ok=$true;machine=$env:COMPUTERNAME;account=$m;group=$g};Write-LasJson -Value $o"
-    )
     if dry_run:
         return {"ok": True, "machine": machine, "account": account, "group": group, "dry_run": True}
+
+    winrm_error = None
     try:
+        script = (
+            "$g='" + group.replace("'", "''") + "';$m='" + account.replace("'", "''") + "';"
+            "if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){"
+            "Remove-LocalGroupMember -Group $g -Member $m -ErrorAction Stop"
+            "}else{"
+            "$adsi=[ADSI]('WinNT://./'+$g+',group');"
+            "$adsi.Remove('WinNT://'+$m.Replace('\\\\','/'))"
+            "};"
+            "$o=@{ok=$true;machine=$env:COMPUTERNAME;account=$m;group=$g};Write-LasJson -Value $o"
+        )
+
         if auth_user and auth_pass:
             username = auth_user
-            if auth_domain and ("\\" not in username and "@" not in username):
-                username = auth_domain + "\\" + username
+            if auth_domain and ("\" not in username and "@" not in username):
+                username = auth_domain + "\" + username
             port = 5986 if use_ssl else 5985
             scheme = "https" if use_ssl else "http"
             target = scheme + "://" + machine + ":" + str(port)
@@ -3335,10 +3419,28 @@ async def api_remove_local_admin(request: Request):
             )
         else:
             session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+
         result = scanner._run_ps(session, script, machine)
-        return {"ok": True, "result": result, "machine": machine, "account": account, "group": group}
+        return {
+            "ok": True, "method": "WinRM", "status": "Removed",
+            "result": result, "machine": machine, "account": account, "group": group,
+        }
     except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e), "machine": machine, "account": account}, status_code=500)
+        winrm_error = str(e)[:500]
+
+    rpc_result = _remove_local_group_member_rpc(machine, group, account)
+    if rpc_result is not None and rpc_result.get("ok"):
+        rpc_result.update({"machine": machine, "account": account, "group": group, "winrm_error": winrm_error})
+        return rpc_result
+
+    error = "WinRM failed and native RPC/NetAPI fallback is unavailable"
+    if rpc_result is not None:
+        error = rpc_result.get("error") or error
+    return JSONResponse({
+        "ok": False, "status": "Failed", "error": error,
+        "winrm_error": winrm_error, "rpc": rpc_result,
+        "machine": machine, "account": account, "group": group,
+    }, status_code=502)
 
 
 @app.get("/api/results/filter")
