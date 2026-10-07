@@ -3634,24 +3634,29 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
                 items.append((full, name, sid))
             return items
 
-        members = get_members()
-        target = None
-        for full, name, sid in members:
-            if target_sid and sid and sid.upper() == target_sid.upper():
-                target = (full, name, sid)
-                break
-            if (
-                full.casefold() == requested.casefold()
-                or name.casefold() == requested.rsplit("\\", 1)[-1].casefold()
-            ):
-                target = (full, name, sid)
-                break
+        if requested.upper().startswith("S-"):
+            # An orphaned SID must be passed straight to the target; do not
+            # require WMI/AD name resolution to discover it first.
+            target = ("", "", requested)
+        else:
+            members = get_members()
+            target = None
+            for full, name, sid in members:
+                if target_sid and sid and sid.upper() == target_sid.upper():
+                    target = (full, name, sid)
+                    break
+                if (
+                    full.casefold() == requested.casefold()
+                    or name.casefold() == requested.rsplit("\\", 1)[-1].casefold()
+                ):
+                    target = (full, name, sid)
+                    break
 
-        if not target:
-            return {
-                "ok": True, "method": "WMI", "status": "AlreadyAbsent",
-                "group_resolved": group_name,
-            }
+            if not target:
+                return {
+                    "ok": True, "method": "WMI", "status": "AlreadyAbsent",
+                    "group_resolved": group_name,
+                }
 
         target_sid = target[2] or target_sid
         if not target_sid:
