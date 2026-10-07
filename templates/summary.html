@@ -823,7 +823,7 @@ function exportRemediationScript(){
         '',
         'function Remove-LasWmi {',
         '  param([string]$Computer,[string]$Group,[string]$Member)',
-        '  $g=Get-WmiObject Win32_Group -ComputerName $Computer -Credential $LasCredential -Filter "SID=''S-1-5-32-544''" -ErrorAction Stop | Select-Object -First 1',
+        "  $g=Get-WmiObject Win32_Group -ComputerName $Computer -Credential $LasCredential -Filter \"SID='S-1-5-32-544'\" -ErrorAction Stop | Select-Object -First 1",
         '  if(-not $g){throw "Local Administrators group not found through WMI"}',
         '  $groupName=[string]$g.Name;$shortMember=($Member -split "\\")[-1]',
         '  $rels=@(Get-WmiObject Win32_GroupUser -ComputerName $Computer -Credential $LasCredential -ErrorAction Stop)',
