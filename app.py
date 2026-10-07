@@ -3664,7 +3664,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
         # Run on the target. Remove-LocalGroupMember accepts SID members, but
         # older hosts may not have Microsoft.PowerShell.LocalAccounts, so the
         # helper falls back to NetLocalGroupDelMembers level 0.
-        ps = StringBuilder = r'''
+        ps = r'''
 $ErrorActionPreference = "Stop"
 $groupName = __GROUP__
 $memberSidText = __SID__
