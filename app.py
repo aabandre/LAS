@@ -3745,8 +3745,8 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
 
     def run_winrm():
         username = auth_user
-        if auth_user and auth_pass and auth_domain and ("\" not in username and "@" not in username):
-            username = auth_domain + "\" + username
+        if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
+            username = auth_domain + "\\" + username
 
         if auth_user and auth_pass:
             port = 5986 if use_ssl else 5985
