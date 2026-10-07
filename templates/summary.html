@@ -792,7 +792,7 @@ function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
 function exportRemediationScript(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
     var lines=[
-        '# LAS remediation v7 - WinRM + credentialed WMI fallback',
+        '# LAS remediation v8 - native net localgroup removal',
         '# Windows PowerShell 5.1, account must have local administrator rights.',
         'Set-StrictMode -Version Latest',
         '$ErrorActionPreference="Stop"',
@@ -806,15 +806,21 @@ function exportRemediationScript(){
         '  $script={',
         '    param($RequestedGroup,$TargetMember)',
         '    $ErrorActionPreference="Stop"',
-        '    $g=Get-LocalGroup -SID ([System.Security.Principal.SecurityIdentifier]"S-1-5-32-544") -ErrorAction Stop',
-        '    $members=@(Get-LocalGroupMember -Group $g -ErrorAction Stop)',
-        '    $target=$null',
-        '    try{$targetSid=(New-Object System.Security.Principal.NTAccount($TargetMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{$targetSid=$null}',
-        '    foreach($m in $members){if(($targetSid -and $m.SID -and $m.SID.Value -eq $targetSid.Value) -or ([string]$m.Name -ieq $TargetMember) -or (([string]$m.Name).Split("\\")[-1] -ieq ($TargetMember -split "\\")[-1])){$target=$m;break}}',
-        '    if(-not $target){return "AlreadyAbsent"}',
-        '    Remove-LocalGroupMember -Group $g -Member $target -Confirm:$false -ErrorAction Stop',
-        '    $left=@(Get-LocalGroupMember -Group $g -ErrorAction Stop)',
-        '    foreach($m in $left){if($target.SID -and $m.SID -and $m.SID.Value -eq $target.SID.Value){throw "Member is still present after WinRM removal"}}',
+        '    $groupName=$null',
+        '    try{$g=Get-WmiObject Win32_Group -Filter "SID=''S-1-5-32-544''" -ErrorAction Stop | Select-Object -First 1;if($g){$groupName=[string]$g.Name}}catch{}',
+        '    if(-not $groupName -and (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)){try{$lg=Get-LocalGroup | Where-Object {$_.Name -ieq $RequestedGroup} | Select-Object -First 1;if($lg){$groupName=[string]$lg.Name}}catch{}}',
+        '    if(-not $groupName){throw "Local Administrators group not found"}',
+        '    $present=$false',
+        '    if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){try{$sid=$null;try{$sid=(New-Object System.Security.Principal.NTAccount($TargetMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{};foreach($m in @(Get-LocalGroupMember -Group $groupName -ErrorAction Stop)){if(($sid -and $m.SID -and $m.SID.Value -eq $sid.Value) -or ([string]$m.Name -ieq $TargetMember) -or (([string]$m.Name).Split("\")[-1] -ieq ($TargetMember -split "\")[-1])){$present=$true;break}}}catch{}}',
+        '    if(-not $present){try{$short=($TargetMember -split "\")[-1];foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match ("Name=""{0}""" -f [regex]::Escape($groupName)) -and $pc -match ("Name=""{0}""" -f [regex]::Escape($short))){$present=$true;break}}}catch{}}',
+        '    if(-not $present){return "AlreadyAbsent"}',
+        '    $out=& net.exe localgroup $groupName $TargetMember /delete 2>&1;$rc=[int]$LASTEXITCODE',
+        '    if($rc -ne 0){throw ("net localgroup failed with exit code {0}: {1}" -f $rc,($out -join " "))}',
+        '    Start-Sleep -Milliseconds 700',
+        '    $still=$false',
+        '    if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){try{$sid=$null;try{$sid=(New-Object System.Security.Principal.NTAccount($TargetMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{};foreach($m in @(Get-LocalGroupMember -Group $groupName -ErrorAction Stop)){if(($sid -and $m.SID -and $m.SID.Value -eq $sid.Value) -or ([string]$m.Name -ieq $TargetMember) -or (([string]$m.Name).Split("\")[-1] -ieq ($TargetMember -split "\")[-1])){$still=$true;break}}}catch{}}',
+        '    if(-not $still){try{$short=($TargetMember -split "\")[-1];foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match ("Name=""{0}""" -f [regex]::Escape($groupName)) -and $pc -match ("Name=""{0}""" -f [regex]::Escape($short))){$still=$true;break}}}catch{}}',
+        '    if($still){throw "Member is still present after net localgroup removal"}',
         '    return "Removed"',
         '  }',
         '  $status=Invoke-Command -ComputerName $Computer -Credential $LasCredential -ScriptBlock $script -ArgumentList $Group,$Member -ErrorAction Stop',
@@ -864,7 +870,7 @@ function exportRemediationScript(){
     lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Force -Path $csvPath');
     lines.push('Write-Host ("CSV: "+$csvPath)');
     var blob=new Blob([lines.join("\n")],{type:"text/plain;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");
-    a.href=url;a.download="remediate_local_admins_v7_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";
+    a.href=url;a.download="remediate_local_admins_v8_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";
     document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
 }
 
