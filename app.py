@@ -3851,7 +3851,7 @@ def _build_remediation_winrm_script(group, account):
         "    foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){if($m.SID -and $m.SID.Value -ieq $targetSid){$still=$true;break}}"
         "  }"
         "}catch{};"
-        "if(-not $still){try{foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match ('Name=\\"\\"{0}\\"\\"' -f [regex]::Escape($groupName)) -and $pc -match ('SID=\\"\\"{0}\\"\\"' -f [regex]::Escape($targetSid))){$still=$true;break}}}catch{}};",
+        "if(-not $still){try{foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match [regex]::Escape($groupName) -and $pc -match [regex]::Escape($targetSid)){$still=$true;break}}}catch{}};",
         "if($still){throw ('Member is still present after SID removal: '+$targetSid)};"
         "return ('LAS-RESULT:'+(@{Status='Removed';Group=$groupName;Account=$targetName;SID=$targetSid} | ConvertTo-Json -Compress))"
     )
