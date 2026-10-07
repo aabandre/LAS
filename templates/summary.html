@@ -953,7 +953,7 @@ function exportRemediationScript(){
         '  $deadline=(Get-Date).AddSeconds(20)',
         '  do{Start-Sleep -Milliseconds 250;try{$proc=Get-WmiObject Win32_Process -ComputerName $Computer -Credential $LasCredential -Filter "ProcessId=$pid" -ErrorAction Stop}catch{$proc=$null}}while($proc -and (Get-Date) -lt $deadline)',
         '  $after=@(Get-WmiObject Win32_GroupUser -ComputerName $Computer -Credential $LasCredential -ErrorAction Stop)',
-        '  foreach($rel in $after){$pc=[string]$rel.PartComponent;if($pc -match ("SID=""{0}""" -f [regex]::Escape($sid))){throw "Member is still present after WMI/NetAPI removal"}}',
+        '  foreach($rel in $after){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match ("Name=""{0}""" -f [regex]::Escape($groupName)) -and $pc -match ("SID=""{0}""" -f [regex]::Escape($sid))){throw "Member is still present after WMI/NetAPI removal"}}',
         '  [pscustomobject]@{Status="Removed";Method="WMI-NetAPI-SID";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}',
         '}',
         '',
