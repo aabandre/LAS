@@ -1,4 +1,5 @@
 import os
+import asyncio
 import base64
 import sys
 import csv
@@ -3614,89 +3615,95 @@ async def api_remove_local_admin(request: Request):
             "group": group, "dry_run": True
         }
 
-    attempts = []
-    start = time.time()
+    def _run_remediation_sync():
+        attempts = []
+        start = time.time()
 
-    def run_winrm():
-        username = auth_user
-        if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
-            username = auth_domain + "\\" + username
+        def run_winrm():
+            username = auth_user
+            if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
+                username = auth_domain + "\\" + username
 
-        if auth_user and auth_pass:
-            port = 5986 if use_ssl else 5985
-            scheme = "https" if use_ssl else "http"
-            target = scheme + "://" + machine + ":" + str(port)
-            session = winrm.Session(
-                target=target, auth=(username, auth_pass),
-                transport="ntlm", server_cert_validation="ignore",
-                read_timeout_sec=35, operation_timeout_sec=30,
+            if auth_user and auth_pass:
+                port = 5986 if use_ssl else 5985
+                scheme = "https" if use_ssl else "http"
+                target = scheme + "://" + machine + ":" + str(port)
+                session = winrm.Session(
+                    target=target, auth=(username, auth_pass),
+                    transport="ntlm", server_cert_validation="ignore",
+                    read_timeout_sec=35, operation_timeout_sec=30,
+                )
+            else:
+                session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+
+            raw = scanner._run_ps(
+                session, _build_remediation_winrm_script(group, account), machine
             )
-        else:
-            session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+            text = str(raw or "")
+            status = "Removed"
+            result_account = account
+            result_group = group
+            for line in text.splitlines():
+                if line.startswith("LAS-RESULT:"):
+                    try:
+                        obj = json.loads(line[len("LAS-RESULT:"):])
+                        status = str(obj.get("Status") or status)
+                        result_account = str(obj.get("Account") or result_account)
+                        result_group = str(obj.get("Group") or result_group)
+                    except Exception:
+                        pass
+            return {
+                "ok": status not in ("Failed", "StillPresent"),
+                "method": "WinRM",
+                "status": status,
+                "account": result_account,
+                "group": result_group,
+            }
 
-        raw = scanner._run_ps(
-            session, _build_remediation_winrm_script(group, account), machine
-        )
-        text = str(raw or "")
-        status = "Removed"
-        result_account = account
-        result_group = group
-        for line in text.splitlines():
-            if line.startswith("LAS-RESULT:"):
-                try:
-                    obj = json.loads(line[len("LAS-RESULT:"):])
-                    status = str(obj.get("Status") or status)
-                    result_account = str(obj.get("Account") or result_account)
-                    result_group = str(obj.get("Group") or result_group)
-                except Exception:
-                    pass
+        try:
+            result = run_winrm()
+            if result.get("ok"):
+                result.update({
+                    "machine": machine, "account": account, "group": group,
+                    "elapsed_ms": round((time.time()-start)*1000),
+                    "attempts": [{"method": "WinRM", "status": result.get("status")}],
+                })
+                return result
+            attempts.append({"method": "WinRM", "status": result.get("status"), "error": "verification failed"})
+        except Exception as e:
+            attempts.append({"method": "WinRM", "status": "Failed", "error": str(e)[:1000]})
+
+        rpc_result = _remove_local_group_member_rpc(machine, group, account)
+        if rpc_result is not None:
+            attempts.append({
+                "method": rpc_result.get("method", "RPC"),
+                "status": rpc_result.get("status"),
+                "error": rpc_result.get("error", ""),
+            })
+            if rpc_result.get("ok"):
+                rpc_result.update({
+                    "machine": machine, "account": account, "group": group,
+                    "elapsed_ms": round((time.time()-start)*1000),
+                    "attempts": attempts,
+                })
+                return rpc_result
+
+        errors = []
+        for item in attempts:
+            if item.get("error"):
+                errors.append(item["method"] + ": " + item["error"])
         return {
-            "ok": status not in ("Failed", "StillPresent"),
-            "method": "WinRM",
-            "status": status,
-            "account": result_account,
-            "group": result_group,
+            "ok": False, "status": "Failed",
+            "error": " | ".join(errors)[:2000] or "All remediation methods failed",
+            "attempts": attempts,
+            "machine": machine, "account": account, "group": group,
+            "elapsed_ms": round((time.time()-start)*1000),
+            "_http_status": 502,
         }
 
-    try:
-        result = run_winrm()
-        if result.get("ok"):
-            result.update({
-                "machine": machine, "account": account, "group": group,
-                "elapsed_ms": round((time.time()-start)*1000),
-                "attempts": [{"method": "WinRM", "status": result.get("status")}],
-            })
-            return result
-        attempts.append({"method": "WinRM", "status": result.get("status"), "error": "verification failed"})
-    except Exception as e:
-        attempts.append({"method": "WinRM", "status": "Failed", "error": str(e)[:1000]})
-
-    rpc_result = _remove_local_group_member_rpc(machine, group, account)
-    if rpc_result is not None:
-        attempts.append({
-            "method": rpc_result.get("method", "RPC"),
-            "status": rpc_result.get("status"),
-            "error": rpc_result.get("error", ""),
-        })
-        if rpc_result.get("ok"):
-            rpc_result.update({
-                "machine": machine, "account": account, "group": group,
-                "elapsed_ms": round((time.time()-start)*1000),
-                "attempts": attempts,
-            })
-            return rpc_result
-
-    errors = []
-    for item in attempts:
-        if item.get("error"):
-            errors.append(item["method"] + ": " + item["error"])
-    return JSONResponse({
-        "ok": False, "status": "Failed",
-        "error": " | ".join(errors)[:2000] or "All remediation methods failed",
-        "attempts": attempts,
-        "machine": machine, "account": account, "group": group,
-        "elapsed_ms": round((time.time()-start)*1000),
-    }, status_code=502)
+    result = await asyncio.to_thread(_run_remediation_sync)
+    http_status = result.pop("_http_status", 200)
+    return JSONResponse(result, status_code=http_status)
 
 
 @app.get("/api/results/filter")
