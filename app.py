@@ -3301,28 +3301,181 @@ def _remediation_account_key(value):
     return text
 
 
+def _remediation_sid_text(value):
+    if value is None:
+        return ""
+    try:
+        if WIN32SECURITY_AVAILABLE:
+            return str(win32security.ConvertSidToStringSid(value))
+    except Exception:
+        pass
+    text = str(value).strip()
+    return text if text.upper().startswith("S-") else ""
+
+
+def _remediation_group_sid(group):
+    text = str(group or "").strip()
+    if text.upper().startswith("S-"):
+        return text.upper()
+
+    low = text.casefold()
+    if low in {
+        "administrators", "администраторы",
+        "builtin\\administrators", "builtin\\администраторы",
+    }:
+        return "S-1-5-32-544"
+    if low in {
+        "remote desktop users", "пользователи удаленного рабочего стола",
+        "пользователи удалённого рабочего стола",
+    }:
+        return "S-1-5-32-555"
+    if low in {
+        "distributed com users", "пользователи распределенного com",
+        "пользователи распределённого com",
+    }:
+        return "S-1-5-32-562"
+    if low in {
+        "remote management users", "пользователи удаленного управления",
+        "пользователи удалённого управления",
+    }:
+        return "S-1-5-32-580"
+    return ""
+
+
+def _resolve_local_group_name_rpc(machine, group):
+    """Resolve a local group name without assuming the target OS language."""
+    if not WIN32NET_AVAILABLE:
+        raise RuntimeError("pywin32 win32net is not available")
+
+    server = "\\\\" + str(machine).split(".")[0]
+    requested = str(group or "").strip()
+    candidates = []
+
+    def add_candidate(value):
+        value = str(value or "").strip()
+        if value and value.casefold() not in {x.casefold() for x in candidates}:
+            candidates.append(value)
+
+    add_candidate(requested)
+
+    sid_text = _remediation_group_sid(requested)
+    if sid_text and WIN32SECURITY_AVAILABLE:
+        try:
+            sid = win32security.ConvertStringSidToSid(sid_text)
+            domain, name, _sid_type = win32security.LookupAccountSid(
+                str(machine).split(".")[0], sid
+            )
+            add_candidate(name)
+        except Exception as exc:
+            logger.debug("RPC group SID lookup failed for %s/%s: %s", machine, group, exc)
+
+    # Enumerating the local groups is the final language-independent fallback.
+    try:
+        resume = 0
+        while True:
+            data, total, resume = win32net.NetLocalGroupEnum(server, 1, resume, 4096)
+            for item in data:
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                if any(name.casefold() == candidate.casefold() for candidate in candidates):
+                    return name
+            if not resume:
+                break
+    except Exception as exc:
+        logger.debug("RPC local-group enumeration failed for %s: %s", machine, exc)
+
+    # For built-in groups, ask the remote machine to resolve the well-known SID.
+    if sid_text and WIN32SECURITY_AVAILABLE:
+        try:
+            sid = win32security.ConvertStringSidToSid(sid_text)
+            _domain, name, _sid_type = win32security.LookupAccountSid(
+                str(machine).split(".")[0], sid
+            )
+            if name:
+                return str(name)
+        except Exception:
+            pass
+
+    # Last chance: try the names known for the supported built-in groups.
+    aliases = LOCAL_GROUP_NAME_ALIASES.get(sid_text, [])
+    for alias in aliases:
+        add_candidate(alias)
+        try:
+            win32net.NetLocalGroupGetInfo(server, alias, 1)
+            return alias
+        except Exception:
+            pass
+
+    raise RuntimeError(
+        "Local group not found on {0}: requested '{1}', SID '{2}'".format(
+            machine, requested, sid_text or "unknown"
+        )
+    )
+
+
+def _iter_local_group_members_rpc(server, group_name):
+    resume = 0
+    while True:
+        data, total, resume = win32net.NetLocalGroupGetMembers(
+            server, group_name, 2, resume, 4096
+        )
+        for item in data:
+            yield item
+        if not resume:
+            break
+
+
+def _member_sid_for_machine(machine, account):
+    if not WIN32SECURITY_AVAILABLE:
+        return ""
+    requested = str(account or "").strip()
+    if not requested or requested.upper().startswith("S-"):
+        return requested.upper()
+    candidates = [requested]
+    if "\\" in requested:
+        candidates.append(requested.replace("/", "\\"))
+    try:
+        for candidate in candidates:
+            sid, _domain, _sid_type = win32security.LookupAccountName(
+                str(machine).split(".")[0], candidate
+            )
+            sid_text = _remediation_sid_text(sid)
+            if sid_text:
+                return sid_text.upper()
+    except Exception as exc:
+        logger.debug("RPC member SID lookup failed for %s/%s: %s", machine, account, exc)
+    return ""
+
+
+def _rpc_member_matches(item, requested, requested_sid):
+    name = str(item.get("domainandname") or "").strip()
+    sid_text = _remediation_sid_text(item.get("sid"))
+    if requested_sid and sid_text and sid_text.upper() == requested_sid.upper():
+        return True
+    if name.casefold() == requested.casefold():
+        return True
+    return _remediation_account_key(name) == _remediation_account_key(requested)
+
+
 def _verify_local_group_member_rpc(machine, group, account):
     if not WIN32NET_AVAILABLE:
         return None
     server = "\\\\" + str(machine).split(".")[0]
-    target = str(account or "").strip().lower()
+    requested = str(account or "").strip()
     try:
-        resume = 0
-        while True:
-            data, total, resume = win32net.NetLocalGroupGetMembers(server, group, 2, resume, 4096)
-            for item in data:
-                name = str(item.get("domainandname") or "").strip()
-                sid = str(item.get("sid") or "").strip()
-                if target.startswith("s-") and sid.lower() == target:
-                    return True
-                if name.lower() == target or _remediation_account_key(name) == _remediation_account_key(target):
-                    return True
-            if not resume:
-                break
+        group_name = _resolve_local_group_name_rpc(machine, group)
+        requested_sid = _member_sid_for_machine(machine, requested)
+        for item in _iter_local_group_members_rpc(server, group_name):
+            if _rpc_member_matches(item, requested, requested_sid):
+                return True
+        return False
     except Exception as e:
-        logger.debug("RPC remediation verification failed for %s/%s/%s: %s", machine, group, account, e)
+        logger.debug(
+            "RPC remediation verification failed for %s/%s/%s: %s",
+            machine, group, account, e
+        )
         return None
-    return False
 
 
 def _remove_local_group_member_rpc(machine, group, account):
@@ -3331,48 +3484,115 @@ def _remove_local_group_member_rpc(machine, group, account):
 
     server = "\\\\" + str(machine).split(".")[0]
     requested = str(account or "").strip()
-    resolved_name = None
+
     try:
-        resume = 0
-        while True:
-            data, total, resume = win32net.NetLocalGroupGetMembers(server, group, 2, resume, 4096)
-            for item in data:
-                name = str(item.get("domainandname") or "").strip()
-                sid = str(item.get("sid") or "").strip()
-                if not name:
-                    continue
-                if (
-                    requested.lower().startswith("s-") and sid.lower() == requested.lower()
-                ) or (
-                    name.lower() == requested.lower()
-                    or _remediation_account_key(name) == _remediation_account_key(requested)
-                ):
-                    resolved_name = name
-                    break
-            if resolved_name or not resume:
+        group_name = _resolve_local_group_name_rpc(machine, group)
+        requested_sid = _member_sid_for_machine(machine, requested)
+        resolved_name = None
+        resolved_sid = None
+
+        for item in _iter_local_group_members_rpc(server, group_name):
+            if _rpc_member_matches(item, requested, requested_sid):
+                resolved_name = str(item.get("domainandname") or "").strip()
+                resolved_sid = _remediation_sid_text(item.get("sid"))
                 break
 
         if not resolved_name:
-            return {"ok": True, "method": "RPC", "status": "AlreadyAbsent"}
+            return {
+                "ok": True,
+                "method": "RPC",
+                "status": "AlreadyAbsent",
+                "group_resolved": group_name,
+            }
 
-        win32net.NetLocalGroupDelMembers(
-            server, group, 3, [{"domainandname": resolved_name}]
-        )
-        verified = _verify_local_group_member_rpc(machine, group, requested)
+        # Level 0 removes by SID and avoids name/locale/DOMAIN alias issues.
+        if resolved_sid:
+            sid = win32security.ConvertStringSidToSid(resolved_sid) if WIN32SECURITY_AVAILABLE else None
+            if sid is not None:
+                win32net.NetLocalGroupDelMembers(
+                    server, group_name, 0, [{"sid": sid}]
+                )
+            else:
+                win32net.NetLocalGroupDelMembers(
+                    server, group_name, 3, [{"domainandname": resolved_name}]
+                )
+        else:
+            win32net.NetLocalGroupDelMembers(
+                server, group_name, 3, [{"domainandname": resolved_name}]
+            )
+
+        verified = _verify_local_group_member_rpc(machine, group_name, requested)
         if verified is False:
-            return {"ok": True, "method": "RPC", "status": "Removed", "account": resolved_name}
+            return {
+                "ok": True, "method": "RPC", "status": "Removed",
+                "account": resolved_name, "group_resolved": group_name,
+            }
         if verified is True:
             return {
                 "ok": False, "method": "RPC", "status": "StillPresent",
-                "account": resolved_name,
+                "account": resolved_name, "group_resolved": group_name,
                 "error": "Member is still present after RPC removal",
             }
         return {
             "ok": True, "method": "RPC", "status": "RemovedUnverified",
-            "account": resolved_name,
+            "account": resolved_name, "group_resolved": group_name,
         }
     except Exception as e:
-        return {"ok": False, "method": "RPC", "status": "Failed", "error": str(e)[:500]}
+        return {
+            "ok": False, "method": "RPC", "status": "Failed",
+            "error": str(e)[:1000],
+        }
+
+
+def _build_remediation_winrm_script(group, account):
+    group_json = json.dumps(str(group or ""), ensure_ascii=False)
+    account_json = json.dumps(str(account or ""), ensure_ascii=False)
+    group_sid = _remediation_group_sid(group)
+
+    group_sid_ps = (
+        "[System.Security.Principal.SecurityIdentifier]'" + group_sid + "'"
+        if group_sid else "$null"
+    )
+
+    return (
+        "$ErrorActionPreference='Stop';"
+        "$requestedGroup=" + group_json + ";"
+        "$requestedMember=" + account_json + ";"
+        "$groupSid=" + group_sid_ps + ";"
+        "$groupObj=$null;"
+        "$memberObj=$null;"
+        "if(Get-Command Get-LocalGroup -ErrorAction SilentlyContinue){"
+        "  if($groupSid){$groupObj=Get-LocalGroup -SID $groupSid -ErrorAction Stop}"
+        "  if(-not $groupObj){$groupObj=Get-LocalGroup | Where-Object {$_.Name -ieq $requestedGroup} | Select-Object -First 1}"
+        "  if(-not $groupObj){throw ('Local group not found: '+$requestedGroup)};"
+        "  $members=@(Get-LocalGroupMember -Group $groupObj -ErrorAction Stop);"
+        "  $requestedSid=$null;"
+        "  if($requestedMember -match '^S-[0-9-]+$'){"
+        "    $requestedSid=[System.Security.Principal.SecurityIdentifier]$requestedMember"
+        "  }else{"
+        "    try{$requestedSid=(New-Object System.Security.Principal.NTAccount($requestedMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{}"
+        "  };"
+        "  foreach($m in $members){"
+        "    $same=$false;"
+        "    if($requestedSid -and $m.SID -and $m.SID.Value -eq $requestedSid.Value){$same=$true}"
+        "    if(([string]$m.Name) -ieq $requestedMember){$same=$true}"
+        "    if(([string]$m.Name).Split('\\')[-1] -ieq $requestedMember.Split('\\')[-1]){$same=$true}"
+        "    if($same){$memberObj=$m;break}"
+        "  };"
+        "  if(-not $memberObj){"
+        "    return ('LAS-RESULT:'+(@{Status='AlreadyAbsent';Group=$groupObj.Name;Account=$requestedMember} | ConvertTo-Json -Compress))"
+        "  };"
+        "  Remove-LocalGroupMember -Group $groupObj -Member $memberObj -ErrorAction Stop;"
+        "  $left=@(Get-LocalGroupMember -Group $groupObj -ErrorAction Stop);"
+        "  foreach($m in $left){"
+        "    if($memberObj.SID -and $m.SID -and $m.SID.Value -eq $memberObj.SID.Value){throw 'Member is still present after WinRM removal'}"
+        "    if(([string]$m.Name) -ieq ([string]$memberObj.Name)){throw 'Member is still present after WinRM removal'}"
+        "  };"
+        "  return ('LAS-RESULT:'+(@{Status='Removed';Group=$groupObj.Name;Account=$memberObj.Name} | ConvertTo-Json -Compress))"
+        "}else{"
+        "  throw 'Microsoft.PowerShell.LocalAccounts is unavailable';"
+        "}"
+    )
 
 
 @app.post("/api/remediate/remove-local-admin")
@@ -3389,57 +3609,95 @@ async def api_remove_local_admin(request: Request):
 
     if not machine or not account:
         return JSONResponse({"error": "machine and account are required"}, status_code=400)
-    if dry_run:
-        return {"ok": True, "machine": machine, "account": account, "group": group, "dry_run": True}
 
-    winrm_error = None
-    try:
-        script = (
-            "$g='" + group.replace("'", "''") + "';$m='" + account.replace("'", "''") + "';"
-            "if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){"
-            "Remove-LocalGroupMember -Group $g -Member $m -ErrorAction Stop"
-            "}else{"
-            "$adsi=[ADSI]('WinNT://./'+$g+',group');"
-            "$adsi.Remove('WinNT://'+$m.Replace('\\\\','/'))"
-            "};"
-            "$o=@{ok=$true;machine=$env:COMPUTERNAME;account=$m;group=$g};Write-LasJson -Value $o"
-        )
+    if dry_run:
+        return {
+            "ok": True, "machine": machine, "account": account,
+            "group": group, "dry_run": True
+        }
+
+    attempts = []
+    start = time.time()
+
+    def run_winrm():
+        username = auth_user
+        if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
+            username = auth_domain + "\\" + username
 
         if auth_user and auth_pass:
-            username = auth_user
-            if auth_domain and ("\\" not in username and "@" not in username):
-                username = auth_domain + "\\" + username
             port = 5986 if use_ssl else 5985
             scheme = "https" if use_ssl else "http"
             target = scheme + "://" + machine + ":" + str(port)
             session = winrm.Session(
                 target=target, auth=(username, auth_pass),
                 transport="ntlm", server_cert_validation="ignore",
-                read_timeout_sec=30, operation_timeout_sec=25,
+                read_timeout_sec=35, operation_timeout_sec=30,
             )
         else:
             session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
 
-        result = scanner._run_ps(session, script, machine)
+        raw = scanner._run_ps(
+            session, _build_remediation_winrm_script(group, account), machine
+        )
+        text = str(raw or "")
+        status = "Removed"
+        result_account = account
+        result_group = group
+        for line in text.splitlines():
+            if line.startswith("LAS-RESULT:"):
+                try:
+                    obj = json.loads(line[len("LAS-RESULT:"):])
+                    status = str(obj.get("Status") or status)
+                    result_account = str(obj.get("Account") or result_account)
+                    result_group = str(obj.get("Group") or result_group)
+                except Exception:
+                    pass
         return {
-            "ok": True, "method": "WinRM", "status": "Removed",
-            "result": result, "machine": machine, "account": account, "group": group,
+            "ok": status not in ("Failed", "StillPresent"),
+            "method": "WinRM",
+            "status": status,
+            "account": result_account,
+            "group": result_group,
         }
+
+    try:
+        result = run_winrm()
+        if result.get("ok"):
+            result.update({
+                "machine": machine, "account": account, "group": group,
+                "elapsed_ms": round((time.time()-start)*1000),
+                "attempts": [{"method": "WinRM", "status": result.get("status")}],
+            })
+            return result
+        attempts.append({"method": "WinRM", "status": result.get("status"), "error": "verification failed"})
     except Exception as e:
-        winrm_error = str(e)[:500]
+        attempts.append({"method": "WinRM", "status": "Failed", "error": str(e)[:1000]})
 
     rpc_result = _remove_local_group_member_rpc(machine, group, account)
-    if rpc_result is not None and rpc_result.get("ok"):
-        rpc_result.update({"machine": machine, "account": account, "group": group, "winrm_error": winrm_error})
-        return rpc_result
-
-    error = "WinRM failed and native RPC/NetAPI fallback is unavailable"
     if rpc_result is not None:
-        error = rpc_result.get("error") or error
+        attempts.append({
+            "method": rpc_result.get("method", "RPC"),
+            "status": rpc_result.get("status"),
+            "error": rpc_result.get("error", ""),
+        })
+        if rpc_result.get("ok"):
+            rpc_result.update({
+                "machine": machine, "account": account, "group": group,
+                "elapsed_ms": round((time.time()-start)*1000),
+                "attempts": attempts,
+            })
+            return rpc_result
+
+    errors = []
+    for item in attempts:
+        if item.get("error"):
+            errors.append(item["method"] + ": " + item["error"])
     return JSONResponse({
-        "ok": False, "status": "Failed", "error": error,
-        "winrm_error": winrm_error, "rpc": rpc_result,
+        "ok": False, "status": "Failed",
+        "error": " | ".join(errors)[:2000] or "All remediation methods failed",
+        "attempts": attempts,
         "machine": machine, "account": account, "group": group,
+        "elapsed_ms": round((time.time()-start)*1000),
     }, status_code=502)
 
 
