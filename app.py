@@ -49,6 +49,13 @@ try:
 except ImportError:
     pass
 
+WIN32SECURITY_AVAILABLE = False
+try:
+    import win32security
+    WIN32SECURITY_AVAILABLE = True
+except ImportError:
+    pass
+
 logger = logging.getLogger("scanner")
 logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
