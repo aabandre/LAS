@@ -845,7 +845,7 @@ function exportRemediationScript(){
         '}',
         '',
         '$results=@()',
-        '$total='+remediationQueue.length+''
+        '$total='+remediationQueue.length,
     ];
     for(var i=0;i<remediationQueue.length;i++){
         var r=remediationQueue[i],m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=r.account.replace(/'/g,"''");
