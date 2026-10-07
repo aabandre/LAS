@@ -2966,6 +2966,12 @@ foreach ($groupName in $candidates) {
 
 scanner = Scanner()
 
+# Remediation runs outside the FastAPI event loop. A target can be slow or
+# unreachable at the RPC/WMI layer without freezing the web UI.
+remediation_executor = ThreadPoolExecutor(max_workers=8)
+remediation_jobs = {}
+remediation_jobs_lock = threading.Lock()
+
 def _rebuild_admins_from_scan(summary_filename, summary_data):
     ts = summary_filename.replace("summary_", "").replace(".json", "")
     scan_filename = "scan_" + ts + ".json"
@@ -3543,6 +3549,134 @@ def _remove_local_group_member_rpc(machine, group, account):
         }
 
 
+def _remove_local_group_member_wmi(machine, group, account, username="", password="", domain=""):
+    """
+    Remove a local Administrators member through WMI/DCOM.
+
+    This deliberately avoids ADSI and NetLocalGroupDelMembers for the UI path:
+    the WMI connection uses the credentials entered in the remediation form,
+    and Win32_Process.Create runs the invariant 'net localgroup ... /delete'
+    on the target. Membership is then verified through Win32_Group associations.
+    """
+    if not WMI_AVAILABLE:
+        return None
+
+    user = str(username or "").strip()
+    if not user or not password:
+        return None
+    if domain and "\\" not in user and "@" not in user:
+        user = str(domain).strip() + "\\" + user
+
+    host = str(machine or "").strip()
+    short_host = host.split(".")[0]
+    requested = str(account or "").strip()
+    group_sid = _remediation_group_sid(group) or "S-1-5-32-544"
+
+    try:
+        c = wmi_module.WMI(
+            computer=short_host,
+            user=user,
+            password=password,
+            namespace="root\\cimv2",
+        )
+
+        groups = c.Win32_Group(SID=group_sid)
+        if not groups:
+            return {
+                "ok": False, "method": "WMI", "status": "Failed",
+                "error": "Local group with SID {} was not found".format(group_sid),
+            }
+
+        g = groups[0]
+        group_name = str(getattr(g, "Name", "") or group)
+        target_sid = _member_sid_for_machine(short_host, requested)
+
+        def get_members():
+            items = []
+            try:
+                assoc = g.associators()
+            except Exception:
+                assoc = []
+            for item in assoc:
+                name = str(getattr(item, "Name", "") or "").strip()
+                dom = str(getattr(item, "Domain", "") or "").strip()
+                sid = _remediation_sid_text(getattr(item, "SID", None))
+                full = (dom + "\\" + name) if dom and name else name
+                items.append((full, name, sid))
+            return items
+
+        members = get_members()
+        target = None
+        for full, name, sid in members:
+            if target_sid and sid and sid.upper() == target_sid.upper():
+                target = (full, name, sid)
+                break
+            if full.casefold() == requested.casefold() or name.casefold() == requested.rsplit("\\", 1)[-1].casefold():
+                target = (full, name, sid)
+                break
+
+        if not target:
+            return {
+                "ok": True, "method": "WMI", "status": "AlreadyAbsent",
+                "group_resolved": group_name,
+            }
+
+        # 'net localgroup' is the Windows-native local SAM operation. The
+        # process is created on the target by WMI, so no WinRM is required.
+        def q(v):
+            return '"' + str(v).replace('"', '\"') + '"'
+
+        command = 'cmd.exe /d /c net localgroup {0} {1} /delete'.format(
+            q(group_name), q(target[0] or requested)
+        )
+        result = c.Win32_Process.Create(CommandLine=command)
+        pid = int(getattr(result, "ProcessId", 0) or 0)
+        ret = int(getattr(result, "ReturnValue", 0) or 0)
+        if ret != 0 or not pid:
+            return {
+                "ok": False, "method": "WMI", "status": "Failed",
+                "group_resolved": group_name,
+                "error": "Win32_Process.Create failed: return value {}".format(ret),
+            }
+
+        # Wait briefly for net.exe, but never block the web request itself:
+        # this function runs in remediation_executor.
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            try:
+                if not c.Win32_Process(ProcessId=pid):
+                    break
+            except Exception:
+                break
+            time.sleep(0.25)
+
+        left = get_members()
+        for full, name, sid in left:
+            if target_sid and sid and sid.upper() == target_sid.upper():
+                return {
+                    "ok": False, "method": "WMI", "status": "StillPresent",
+                    "group_resolved": group_name,
+                    "error": "Member is still present after WMI/net localgroup removal",
+                }
+            if full.casefold() == requested.casefold() or name.casefold() == requested.rsplit("\\", 1)[-1].casefold():
+                return {
+                    "ok": False, "method": "WMI", "status": "StillPresent",
+                    "group_resolved": group_name,
+                    "error": "Member is still present after WMI/net localgroup removal",
+                }
+
+        return {
+            "ok": True, "method": "WMI", "status": "Removed",
+            "account": target[0] or requested,
+            "group_resolved": group_name,
+        }
+    except Exception as e:
+        return {
+            "ok": False, "method": "WMI", "status": "Failed",
+            "error": str(e)[:1000],
+        }
+
+
 def _build_remediation_winrm_script(group, account):
     group_json = json.dumps(str(group or ""), ensure_ascii=False)
     account_json = json.dumps(str(account or ""), ensure_ascii=False)
@@ -3594,6 +3728,122 @@ def _build_remediation_winrm_script(group, account):
     )
 
 
+def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, auth_pass, auth_domain):
+    start = time.time()
+    attempts = []
+
+    def finish(result):
+        result.update({
+            "job_id": job_id,
+            "machine": machine,
+            "account": account,
+            "group": group,
+            "elapsed_ms": round((time.time() - start) * 1000),
+        })
+        with remediation_jobs_lock:
+            remediation_jobs[job_id] = result
+
+    def run_winrm():
+        username = auth_user
+        if auth_user and auth_pass and auth_domain and ("\" not in username and "@" not in username):
+            username = auth_domain + "\" + username
+
+        if auth_user and auth_pass:
+            port = 5986 if use_ssl else 5985
+            scheme = "https" if use_ssl else "http"
+            target = scheme + "://" + machine + ":" + str(port)
+            session = winrm.Session(
+                target=target, auth=(username, auth_pass),
+                transport="ntlm", server_cert_validation="ignore",
+                read_timeout_sec=20, operation_timeout_sec=15,
+            )
+        else:
+            session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+
+        raw = scanner._run_ps(
+            session, _build_remediation_winrm_script(group, account), machine
+        )
+        text = str(raw or "")
+        status = "Removed"
+        result_account = account
+        result_group = group
+        for line in text.splitlines():
+            if line.startswith("LAS-RESULT:"):
+                try:
+                    obj = json.loads(line[len("LAS-RESULT:"):])
+                    status = str(obj.get("Status") or status)
+                    result_account = str(obj.get("Account") or result_account)
+                    result_group = str(obj.get("Group") or result_group)
+                except Exception:
+                    pass
+        return {
+            "ok": status not in ("Failed", "StillPresent"),
+            "method": "WinRM",
+            "status": status,
+            "account": result_account,
+            "group": result_group,
+        }
+
+    try:
+        result = run_winrm()
+        if result.get("ok"):
+            finish(result)
+            return
+        attempts.append({"method": "WinRM", "status": result.get("status"), "error": "verification failed"})
+    except Exception as e:
+        attempts.append({"method": "WinRM", "status": "Failed", "error": str(e)[:1000]})
+
+    # WMI/DCOM is the credential-aware fallback. Unlike the old ADSI fallback,
+    # it does not depend on the web server's process credentials and does not
+    # enumerate the WinNT provider tree.
+    try:
+        result = _remove_local_group_member_wmi(
+            machine, group, account, auth_user, auth_pass, auth_domain
+        )
+        if result is not None:
+            attempts.append({
+                "method": result.get("method", "WMI"),
+                "status": result.get("status"),
+                "error": result.get("error", ""),
+            })
+            if result.get("ok"):
+                result.update({
+                    "attempts": attempts,
+                })
+                finish(result)
+                return
+    except Exception as e:
+        attempts.append({"method": "WMI", "status": "Failed", "error": str(e)[:1000]})
+
+    # Last fallback: NetAPI. This remains useful when the LAS service itself
+    # already runs under an account allowed to administer the target.
+    try:
+        rpc_result = _remove_local_group_member_rpc(machine, group, account)
+        if rpc_result is not None:
+            attempts.append({
+                "method": rpc_result.get("method", "RPC"),
+                "status": rpc_result.get("status"),
+                "error": rpc_result.get("error", ""),
+            })
+            if rpc_result.get("ok"):
+                rpc_result.update({"attempts": attempts})
+                finish(rpc_result)
+                return
+    except Exception as e:
+        attempts.append({"method": "RPC", "status": "Failed", "error": str(e)[:1000]})
+
+    errors = []
+    for item in attempts:
+        if item.get("error"):
+            errors.append(item["method"] + ": " + item["error"])
+    finish({
+        "ok": False,
+        "status": "Failed",
+        "error": " | ".join(errors)[:2000] or "All remediation methods failed",
+        "attempts": attempts,
+    })
+
+
 @app.post("/api/remediate/remove-local-admin")
 async def api_remove_local_admin(request: Request):
     body = await request.json()
@@ -3615,95 +3865,43 @@ async def api_remove_local_admin(request: Request):
             "group": group, "dry_run": True
         }
 
-    def _run_remediation_sync():
-        attempts = []
-        start = time.time()
-
-        def run_winrm():
-            username = auth_user
-            if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
-                username = auth_domain + "\\" + username
-
-            if auth_user and auth_pass:
-                port = 5986 if use_ssl else 5985
-                scheme = "https" if use_ssl else "http"
-                target = scheme + "://" + machine + ":" + str(port)
-                session = winrm.Session(
-                    target=target, auth=(username, auth_pass),
-                    transport="ntlm", server_cert_validation="ignore",
-                    read_timeout_sec=35, operation_timeout_sec=30,
-                )
-            else:
-                session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
-
-            raw = scanner._run_ps(
-                session, _build_remediation_winrm_script(group, account), machine
-            )
-            text = str(raw or "")
-            status = "Removed"
-            result_account = account
-            result_group = group
-            for line in text.splitlines():
-                if line.startswith("LAS-RESULT:"):
-                    try:
-                        obj = json.loads(line[len("LAS-RESULT:"):])
-                        status = str(obj.get("Status") or status)
-                        result_account = str(obj.get("Account") or result_account)
-                        result_group = str(obj.get("Group") or result_group)
-                    except Exception:
-                        pass
-            return {
-                "ok": status not in ("Failed", "StillPresent"),
-                "method": "WinRM",
-                "status": status,
-                "account": result_account,
-                "group": result_group,
-            }
-
-        try:
-            result = run_winrm()
-            if result.get("ok"):
-                result.update({
-                    "machine": machine, "account": account, "group": group,
-                    "elapsed_ms": round((time.time()-start)*1000),
-                    "attempts": [{"method": "WinRM", "status": result.get("status")}],
-                })
-                return result
-            attempts.append({"method": "WinRM", "status": result.get("status"), "error": "verification failed"})
-        except Exception as e:
-            attempts.append({"method": "WinRM", "status": "Failed", "error": str(e)[:1000]})
-
-        rpc_result = _remove_local_group_member_rpc(machine, group, account)
-        if rpc_result is not None:
-            attempts.append({
-                "method": rpc_result.get("method", "RPC"),
-                "status": rpc_result.get("status"),
-                "error": rpc_result.get("error", ""),
-            })
-            if rpc_result.get("ok"):
-                rpc_result.update({
-                    "machine": machine, "account": account, "group": group,
-                    "elapsed_ms": round((time.time()-start)*1000),
-                    "attempts": attempts,
-                })
-                return rpc_result
-
-        errors = []
-        for item in attempts:
-            if item.get("error"):
-                errors.append(item["method"] + ": " + item["error"])
-        return {
-            "ok": False, "status": "Failed",
-            "error": " | ".join(errors)[:2000] or "All remediation methods failed",
-            "attempts": attempts,
-            "machine": machine, "account": account, "group": group,
-            "elapsed_ms": round((time.time()-start)*1000),
-            "_http_status": 502,
+    job_id = "{}-{:08x}".format(
+        datetime.now().strftime("%Y%m%d%H%M%S%f"),
+        abs(hash((machine, account, time.time_ns()))) & 0xffffffff,
+    )
+    with remediation_jobs_lock:
+        remediation_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "Running",
+            "state": "running",
+            "machine": machine,
+            "account": account,
+            "group": group,
         }
 
-    result = await asyncio.to_thread(_run_remediation_sync)
-    http_status = result.pop("_http_status", 200)
-    return JSONResponse(result, status_code=http_status)
+    remediation_executor.submit(
+        _run_remediation_job,
+        job_id, machine, account, group, use_ssl,
+        auth_user, auth_pass, auth_domain,
+    )
+    return JSONResponse({
+        "ok": True,
+        "accepted": True,
+        "job_id": job_id,
+        "status": "Running",
+        "machine": machine,
+        "account": account,
+        "group": group,
+    }, status_code=202)
+
+
+@app.get("/api/remediate/job/{job_id}")
+async def api_remediation_job(job_id: str):
+    with remediation_jobs_lock:
+        result = remediation_jobs.get(job_id)
+    if result is None:
+        return JSONResponse({"error": "Unknown remediation job"}, status_code=404)
+    return JSONResponse(result)
 
 
 @app.get("/api/results/filter")
