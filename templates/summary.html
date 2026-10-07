@@ -830,7 +830,7 @@ function exportRemediationScript(){
         '  $present=$false',
         '  foreach($rel in $rels){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -notmatch ("Name=""{0}""" -f [regex]::Escape($groupName))){continue};if($pc -match ("Name=""{0}""" -f [regex]::Escape($shortMember))){$present=$true;break}}',
         '  if(-not $present){return [pscustomobject]@{Status="AlreadyAbsent";Method="WMI";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}}',
-        '  $safeGroup=$groupName.Replace("""","""""");$safeMember=$Member.Replace("""","""""")',
+        '  $safeGroup=$groupName.Replace(''"'',''""'');$safeMember=$Member.Replace(''"'',''""'')',
         '  $cmd="cmd.exe /d /c net localgroup ""$safeGroup"" ""$safeMember"" /delete"',
         '  $p=Invoke-WmiMethod -Class Win32_Process -Name Create -ComputerName $Computer -Credential $LasCredential -ArgumentList $cmd -ErrorAction Stop',
         '  if([int]$p.ReturnValue -ne 0){throw "Win32_Process.Create failed: $($p.ReturnValue)"}',
