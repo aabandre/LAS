@@ -3814,7 +3814,6 @@ def _build_remediation_winrm_script(group, account):
         "if(-not $present){"
         "  try{"
         "    foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){"
-        "      $pc=[string]$rel.PartComponent;"
         "      $gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;"
         "      if($gc -match ('Name=\"\"{0}\"\"' -f [regex]::Escape($groupName)) -and $pc -match ('SID=\"\"{0}\"\"' -f [regex]::Escape($targetSid))){$present=$true;break}"
         "    }"
