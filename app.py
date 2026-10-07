@@ -3898,7 +3898,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
                     pass
         return {
             "ok": status not in ("Failed", "StillPresent"),
-            "method": "WinRM",
+            "method": "WinRM-NetAPI-SID",
             "status": status,
             "account": result_account,
             "group": result_group,
