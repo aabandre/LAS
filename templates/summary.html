@@ -819,7 +819,8 @@ function exportRemediationScript(){
         '',
         'function Get-LasAdsiMember {',
         '  param([object]$GroupObj,[string]$Computer,[string]$Member)',
-        '  $short=($Member -split "\\")[-1]',
+        '  $slash=$Member.LastIndexOf([char]92)',
+        '  $short=if($slash -ge 0){$Member.Substring($slash+1)}else{$Member}',
         '  foreach($item in @($GroupObj.psbase.Invoke("Members"))){',
         '    $name=$item.GetType().InvokeMember("Name","GetProperty",$null,$item,$null)',
         '    $path=$item.GetType().InvokeMember("ADsPath","GetProperty",$null,$item,$null)',
@@ -907,7 +908,9 @@ function exportRemediationScript(){
     }
     lines.push('Write-Progress -Activity "LAS local admin remediation" -Completed');
     lines.push('$results | Format-Table -AutoSize');
-    lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $PWD "las-remediation-results.csv")');
+    lines.push('$csvPath=Join-Path $env:TEMP ("las-remediation-results-"+(Get-Date -Format "yyyyMMdd-HHmmss")+".csv")');
+    lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Force -Path $csvPath');
+    lines.push('Write-Host ("CSV: "+$csvPath)');
 
     var blob=new Blob([lines.join("\n")],{type:"text/plain;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");
     a.href=url;
