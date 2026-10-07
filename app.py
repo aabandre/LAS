@@ -3505,21 +3505,12 @@ def _remove_local_group_member_rpc(machine, group, account):
                 "group_resolved": group_name,
             }
 
-        # Level 0 removes by SID and avoids name/locale/DOMAIN alias issues.
-        if resolved_sid:
-            sid = win32security.ConvertStringSidToSid(resolved_sid) if WIN32SECURITY_AVAILABLE else None
-            if sid is not None:
-                win32net.NetLocalGroupDelMembers(
-                    server, group_name, 0, [{"sid": sid}]
-                )
-            else:
-                win32net.NetLocalGroupDelMembers(
-                    server, group_name, 3, [{"domainandname": resolved_name}]
-                )
-        else:
-            win32net.NetLocalGroupDelMembers(
-                server, group_name, 3, [{"domainandname": resolved_name}]
-            )
+        # Remove by the exact DOMAIN\\name returned by the target.
+        # This is supported by the pywin32 NetLocalGroupDelMembers wrapper
+        # and avoids localized group-name and account-name ambiguity.
+        win32net.NetLocalGroupDelMembers(
+            server, group_name, 3, [{"domainandname": resolved_name}]
+        )
 
         verified = _verify_local_group_member_rpc(machine, group_name, requested)
         if verified is False:
