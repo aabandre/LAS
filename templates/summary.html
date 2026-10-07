@@ -825,7 +825,7 @@ function exportRemediationScript(){
         '    $path=$item.GetType().InvokeMember("ADsPath","GetProperty",$null,$item,$null)',
         '    $domain=""',
         '    if("$path" -match "WinNT://([^/]+)/"){$domain=$matches[1]}',
-        '    $full=if($domain -and $domain -ne $Computer){$domain+"\\\\"+$name}else{$name}',
+        '    $full=if($domain -and $domain -ne $Computer){$domain+"\\"+$name}else{$name}',
         '    if("$full" -ieq $Member -or "$name" -ieq $short){return $item}',
         '  }',
         '  return $null',
