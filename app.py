@@ -3567,7 +3567,7 @@ def _build_remediation_winrm_script(group, account):
         "    $same=$false;"
         "    if($requestedSid -and $m.SID -and $m.SID.Value -eq $requestedSid.Value){$same=$true}"
         "    if(([string]$m.Name) -ieq $requestedMember){$same=$true}"
-        "    if(($requestedMember -notmatch '\\\\') -and ([string]$m.Name).Split('\\')[-1] -ieq $requestedMember){$same=$true}"
+        "    if(($requestedMember -notmatch '\\') -and ([string]$m.Name).Split('\\')[-1] -ieq $requestedMember){$same=$true}"
         "    if($same){$memberObj=$m;break}"
         "  };"
         "  if(-not $memberObj){"
