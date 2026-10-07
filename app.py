@@ -3825,7 +3825,7 @@ def _build_remediation_winrm_script(group, account):
         "  [Runtime.InteropServices.Marshal]::Copy($bytes,0,$sidPtr,$bytes.Length);"
         "  [Runtime.InteropServices.Marshal]::WriteIntPtr($bufPtr,$sidPtr);"
         "  $rc=[LasNetApi]::NetLocalGroupDelMembers($null,$groupName,0,$bufPtr,1);"
-        "  if([int]$rc -ne 0){throw ('NetLocalGroupDelMembers failed with Win32 error '+[int]$rc)}"
+        "  if([int]$rc -ne 0){$verifyPresent=$false;try{if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){if($m.SID -and $m.SID.Value -ieq $targetSid){$verifyPresent=$true;break}}}}catch{};if(-not $verifyPresent){try{foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match [regex]::Escape($groupName) -and $pc -match [regex]::Escape($targetSid)){$verifyPresent=$true;break}}}catch{}};if(-not $verifyPresent){return ('LAS-RESULT:'+(@{Status='AlreadyAbsent';Group=$groupName;Account=$targetName;SID=$targetSid} | ConvertTo-Json -Compress))};throw ('NetLocalGroupDelMembers failed with Win32 error '+[int]$rc)}"
         "}finally{"
         "  [Runtime.InteropServices.Marshal]::FreeHGlobal($bufPtr);"
         "  [Runtime.InteropServices.Marshal]::FreeHGlobal($sidPtr)"
