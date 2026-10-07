@@ -3509,6 +3509,46 @@ def _remove_local_group_member_rpc(machine, group, account):
         group_name = _resolve_local_group_name_rpc(machine, group)
         requested_sid = _member_sid_for_machine(machine, requested)
 
+        # For a raw SID, do not enumerate/resolve the member first.  This is
+        # required for orphaned AD SIDs that no longer resolve to an account.
+        if requested.upper().startswith("S-"):
+            target_sid = requested.upper()
+            try:
+                sid_obj = win32security.ConvertStringSidToSid(target_sid) if WIN32SECURITY_AVAILABLE else None
+                if sid_obj is None:
+                    raise RuntimeError("win32security is required for direct SID removal")
+                win32net.NetLocalGroupDelMembers(
+                    server, group_name, 0, [{"sid": sid_obj}]
+                )
+            except Exception as delete_error:
+                verified = _verify_local_group_member_rpc(machine, group_name, target_sid)
+                if verified is False:
+                    return {
+                        "ok": True, "method": "RPC-NetAPI-SID",
+                        "status": "AlreadyAbsent", "sid": target_sid,
+                        "group_resolved": group_name,
+                    }
+                raise delete_error
+            verified = _verify_local_group_member_rpc(machine, group_name, target_sid)
+            if verified is False:
+                return {
+                    "ok": True, "method": "RPC-NetAPI-SID",
+                    "status": "Removed", "sid": target_sid,
+                    "account": requested, "group_resolved": group_name,
+                }
+            if verified is True:
+                return {
+                    "ok": False, "method": "RPC-NetAPI-SID",
+                    "status": "StillPresent", "sid": target_sid,
+                    "account": requested, "group_resolved": group_name,
+                    "error": "Member is still present after NetAPI removal",
+                }
+            return {
+                "ok": True, "method": "RPC-NetAPI-SID",
+                "status": "RemovedUnverified", "sid": target_sid,
+                "account": requested, "group_resolved": group_name,
+            }
+
         target_item = None
         for item in _iter_local_group_members_rpc(server, group_name):
             if _rpc_member_matches(item, requested, requested_sid):
@@ -3793,20 +3833,21 @@ def _build_remediation_winrm_script(group, account):
         "else{"
         "  try{$requestedSid=([System.Security.Principal.NTAccount]$requestedMember).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{}"
         "};"
-        "$targetSid=$null;"
+        "$targetSid=$requestedSid;"
         "$targetName=$requestedMember;"
-        "try{"
-        "  if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
-        "    foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){"
-        "      $msid=if($m.SID){$m.SID.Value}else{''};"
-        "      $mname=[string]$m.Name;"
-        "      if(($requestedSid -and $msid -ieq $requestedSid) -or ($mname -ieq $requestedMember) -or ($mname -split [char]92)[-1] -ieq (($requestedMember -split [char]92)[-1])){"
-        "        $targetSid=$msid;if($mname){$targetName=$mname};break"
+        "if(-not $targetSid){"
+        "  try{"
+        "    if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "      foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){"
+        "        $msid=if($m.SID){$m.SID.Value}else{''};"
+        "        $mname=[string]$m.Name;"
+        "        if(($mname -ieq $requestedMember) -or ($mname -split [char]92)[-1] -ieq (($requestedMember -split [char]92)[-1])){"
+        "          $targetSid=$msid;if($mname){$targetName=$mname};break"
+        "        }"
         "      }"
         "    }"
-        "  }"
-        "}catch{};"
-        "if(-not $targetSid -and $requestedSid){$targetSid=$requestedSid};"
+        "  }catch{}"
+        "};"
         "if(-not $targetSid){throw ('Unable to resolve member SID: '+$requestedMember)};"
 
         # Do not require SID -> account translation or membership enumeration
