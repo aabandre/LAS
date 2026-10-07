@@ -797,7 +797,7 @@ function exportRemediationScript(){
         'Set-StrictMode -Version Latest',
         '$ErrorActionPreference="Stop"',
         '$LasCredential=Get-Credential -Message "LAS remediation credentials (local administrator rights)"',
-        '$LasDomain=' + JSON.stringify(val("remDomain") || "") + ',',
+        '$LasDomain=' + JSON.stringify(val("remDomain") || ""),
         '$LasUser=$LasCredential.UserName',
         'if($LasDomain -and $LasUser -notmatch "\\" -and $LasUser -notmatch "@"){$LasUser=$LasDomain+"\\"+$LasUser;$LasCredential=New-Object System.Management.Automation.PSCredential($LasUser,$LasCredential.Password)}',
         '',
