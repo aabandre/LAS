@@ -3624,7 +3624,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
         # 'net localgroup' is the Windows-native local SAM operation. The
         # process is created on the target by WMI, so no WinRM is required.
         def q(v):
-            return '"' + str(v).replace('"', '\"') + '"'
+            return '"' + str(v).replace('"', '\\\"') + '"'
 
         command = 'cmd.exe /d /c net localgroup {0} {1} /delete'.format(
             q(group_name), q(target[0] or requested)
