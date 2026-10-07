@@ -791,145 +791,85 @@ function renderRemediationQueue(){
 function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
 function exportRemediationScript(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
-
     var lines=[
-        '# LAS remediation v6 - SID based WinRM + ADSI/RPC fallback',
-        '# Run from an elevated PowerShell session with rights on target computers.',
+        '# LAS remediation v7 - WinRM + credentialed WMI fallback',
+        '# Windows PowerShell 5.1, account must have local administrator rights.',
         'Set-StrictMode -Version Latest',
-        '$ErrorActionPreference = "Stop"',
-        '$LasCredential=Get-Credential -Message "LAS remediation credentials (account with local administrator rights)"',
-        '',
-        'function Get-LasAdminGroupAdsi {',
-        '  param([string]$Computer,[string]$RequestedGroup,[pscredential]$Credential)',
-        '  $path="WinNT://$Computer,computer"',
-        '  $net=$Credential.GetNetworkCredential()',
-        '  $root=New-Object System.DirectoryServices.DirectoryEntry($path,$Credential.UserName,$net.Password)',
-        '  foreach($g in @($root.psbase.Children)){',
-        '    if($g.psbase.SchemaClassName -ne "Group"){continue}',
-        '    try{',
-        '      $sidBytes=$g.psbase.InvokeGet("objectSid")',
-        '      if($sidBytes){',
-        '        $sid=(New-Object System.Security.Principal.SecurityIdentifier($sidBytes,0)).Value',
-        '        if($sid -eq "S-1-5-32-544"){return $g}',
-        '      }',
-        '    }catch{}',
-        '  }',
-        '  foreach($name in @($RequestedGroup,"Administrators","Администраторы")){',
-        '    try{return [ADSI]("WinNT://$Computer/"+$name+",group")}catch{}',
-        '  }',
-        '  throw "Local Administrators group not found via ADSI/RPC on $Computer"',
-        '}',
-        '',
-        'function Get-LasAdsiMember {',
-        '  param([object]$GroupObj,[string]$Computer,[string]$Member)',
-        '  $slash=$Member.LastIndexOf([char]92)',
-        '  $short=if($slash -ge 0){$Member.Substring($slash+1)}else{$Member}',
-        '  foreach($item in @($GroupObj.psbase.Invoke("Members"))){',
-        '    $name=$item.GetType().InvokeMember("Name","GetProperty",$null,$item,$null)',
-        '    $path=$item.GetType().InvokeMember("ADsPath","GetProperty",$null,$item,$null)',
-        '    $domain=""',
-        '    if("$path" -match "WinNT://([^/]+)/"){$domain=$matches[1]}',
-        '    $full=if($domain -and $domain -ne $Computer){$domain+"\\"+$name}else{$name}',
-        '    if("$full" -ieq $Member -or "$name" -ieq $short){return $item}',
-        '  }',
-        '  return $null',
-        '}',
-        '',
-        'function Remove-LasAdsi {',
-        '  param([string]$Computer,[string]$Group,[string]$Member,[pscredential]$Credential)',
-        '  $g=Get-LasAdminGroupAdsi $Computer $Group $Credential',
-        '  $m=Get-LasAdsiMember $g $Computer $Member',
-        '  $groupName=try{[string]$g.psbase.InvokeGet("Name")}catch{[string]$g.Name}',
-        '  if(-not $groupName){$groupName=$Group}',
-        '  if(-not $m){return [pscustomobject]@{Status="AlreadyAbsent";Method="ADSI-RPC";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}}',
-        '  $path=$m.GetType().InvokeMember("ADsPath","GetProperty",$null,$m,$null)',
-        '  $g.Remove($path)',
-        '  $left=Get-LasAdsiMember $g $Computer $Member',
-        '  if($left){throw "Member is still present after ADSI/RPC removal"}',
-        '  return [pscustomobject]@{Status="Removed";Method="ADSI-RPC";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}',
-        '}',
+        '$ErrorActionPreference="Stop"',
+        '$LasCredential=Get-Credential -Message "LAS remediation credentials (local administrator rights)"',
         '',
         'function Remove-LasWinRm {',
-        '  param([string]$Computer,[string]$Group,[string]$Member,[pscredential]$Credential)',
+        '  param([string]$Computer,[string]$Group,[string]$Member)',
         '  $script={',
         '    param($RequestedGroup,$TargetMember)',
         '    $ErrorActionPreference="Stop"',
-        '    $groupSid=[System.Security.Principal.SecurityIdentifier]"S-1-5-32-544"',
-        '    if(-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)){throw "Microsoft.PowerShell.LocalAccounts is unavailable"}',
-        '    $g=Get-LocalGroup -SID $groupSid -ErrorAction Stop',
+        '    $g=Get-LocalGroup -SID ([System.Security.Principal.SecurityIdentifier]"S-1-5-32-544") -ErrorAction Stop',
         '    $members=@(Get-LocalGroupMember -Group $g -ErrorAction Stop)',
         '    $target=$null',
-        '    $targetSid=$null',
-        '    if($TargetMember -match "^S-[0-9-]+$"){$targetSid=[System.Security.Principal.SecurityIdentifier]$TargetMember}',
-        '    else{try{$targetSid=(New-Object System.Security.Principal.NTAccount($TargetMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{}}',
-        '    foreach($m in $members){',
-        '      $same=$false',
-        '      if($targetSid -and $m.SID -and $m.SID.Value -eq $targetSid.Value){$same=$true}',
-        '      if(([string]$m.Name) -ieq $TargetMember){$same=$true}',
-        '      if(([string]$m.Name).Split("\\")[-1] -ieq $TargetMember.Split("\\")[-1]){$same=$true}',
-        '      if($same){$target=$m;break}',
-        '    }',
+        '    try{$targetSid=(New-Object System.Security.Principal.NTAccount($TargetMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{$targetSid=$null}',
+        '    foreach($m in $members){if(($targetSid -and $m.SID -and $m.SID.Value -eq $targetSid.Value) -or ([string]$m.Name -ieq $TargetMember) -or (([string]$m.Name).Split("\\")[-1] -ieq ($TargetMember -split "\\")[-1])){$target=$m;break}}',
         '    if(-not $target){return "AlreadyAbsent"}',
-        '    Remove-LocalGroupMember -Group $g -Member $target -ErrorAction Stop',
+        '    Remove-LocalGroupMember -Group $g -Member $target -Confirm:$false -ErrorAction Stop',
         '    $left=@(Get-LocalGroupMember -Group $g -ErrorAction Stop)',
-        '    foreach($m in $left){if($target.SID -and $m.SID -and $m.SID.Value -eq $target.SID.Value){throw "Member is still present after WinRM removal"};if(([string]$m.Name) -ieq ([string]$target.Name)){throw "Member is still present after WinRM removal"}}',
+        '    foreach($m in $left){if($target.SID -and $m.SID -and $m.SID.Value -eq $target.SID.Value){throw "Member is still present after WinRM removal"}}',
         '    return "Removed"',
         '  }',
-        '  $status=Invoke-Command -ComputerName $Computer -Credential $Credential -ScriptBlock $script -ArgumentList $Group,$Member -ErrorAction Stop',
-        '  return [pscustomobject]@{Status=[string]$status;Method="WinRM";Computer=$Computer;Account=$Member;Group=$Group;Error=""}',
+        '  $status=Invoke-Command -ComputerName $Computer -Credential $LasCredential -ScriptBlock $script -ArgumentList $Group,$Member -ErrorAction Stop',
+        '  [pscustomobject]@{Status=[string]$status;Method="WinRM";Computer=$Computer;Account=$Member;Group=$Group;Error=""}',
+        '}',
+        '',
+        'function Remove-LasWmi {',
+        '  param([string]$Computer,[string]$Group,[string]$Member)',
+        '  $g=Get-WmiObject Win32_Group -ComputerName $Computer -Credential $LasCredential -Filter "SID=''S-1-5-32-544''" -ErrorAction Stop | Select-Object -First 1',
+        '  if(-not $g){throw "Local Administrators group not found through WMI"}',
+        '  $groupName=[string]$g.Name;$shortMember=($Member -split "\\")[-1]',
+        '  $rels=@(Get-WmiObject Win32_GroupUser -ComputerName $Computer -Credential $LasCredential -ErrorAction Stop)',
+        '  $present=$false',
+        '  foreach($rel in $rels){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -notmatch ("Name=""{0}""" -f [regex]::Escape($groupName))){continue};if($pc -match ("Name=""{0}""" -f [regex]::Escape($shortMember))){$present=$true;break}}',
+        '  if(-not $present){return [pscustomobject]@{Status="AlreadyAbsent";Method="WMI";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}}',
+        '  $safeGroup=$groupName.Replace("""","""""");$safeMember=$Member.Replace("""","""""")',
+        '  $cmd="cmd.exe /d /c net localgroup ""$safeGroup"" ""$safeMember"" /delete"',
+        '  $p=Invoke-WmiMethod Win32_Process -Name Create -ComputerName $Computer -Credential $LasCredential -ArgumentList $cmd -ErrorAction Stop',
+        '  if([int]$p.ReturnValue -ne 0){throw "Win32_Process.Create failed: $($p.ReturnValue)"}',
+        '  Start-Sleep -Seconds 2',
+        '  $rels2=@(Get-WmiObject Win32_GroupUser -ComputerName $Computer -Credential $LasCredential -ErrorAction Stop)',
+        '  foreach($rel in $rels2){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match ("Name=""{0}""" -f [regex]::Escape($groupName)) -and $pc -match ("Name=""{0}""" -f [regex]::Escape($shortMember))){throw "Member is still present after WMI removal"}}',
+        '  [pscustomobject]@{Status="Removed";Method="WMI";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}',
         '}',
         '',
         'function Remove-LasTarget {',
         '  param([string]$Computer,[string]$Group,[string]$Member)',
-        '  $attempts=@()',
-        '  try{',
-        '    $r=Remove-LasWinRm $Computer $Group $Member $LasCredential',
-        '    return $r',
-        '  }catch{',
-        '    $attempts+="WinRM: "+$_.Exception.Message',
-        '  }',
-        '  try{',
-        '    return Remove-LasAdsi $Computer $Group $Member $LasCredential',
-        '  }catch{',
-        '    return [pscustomobject]@{Status="Failed";Method="FAILED";Computer=$Computer;Account=$Member;Group=$Group;Error=($attempts -join " | ")+" | ADSI-RPC: "+$_.Exception.Message}',
-        '  }',
+        '  try{return Remove-LasWinRm $Computer $Group $Member}catch{$winErr=$_.Exception.Message}',
+        '  try{return Remove-LasWmi $Computer $Group $Member}catch{$wmiErr=$_.Exception.Message}',
+        '  [pscustomobject]@{Status="Failed";Method="FAILED";Computer=$Computer;Account=$Member;Group=$Group;Error=("WinRM: "+$winErr+" | WMI: "+$wmiErr)}',
         '}',
         '',
         '$results=@()',
-        '$total=0'
+        '$total='+remediationQueue.length+''
     ];
-    lines.push('$total='+remediationQueue.length);
-
     for(var i=0;i<remediationQueue.length;i++){
-        var r=remediationQueue[i];
-        var m=r.machine.replace(/'/g,"''"),
-            g=r.group.replace(/'/g,"''"),
-            a=r.account.replace(/'/g,"''");
-
+        var r=remediationQueue[i],m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=r.account.replace(/'/g,"''");
         lines.push('$r=Remove-LasTarget -Computer \''+m+'\' -Group \''+g+'\' -Member \''+a+'\'');
         lines.push('$results+=$r');
-        lines.push('Write-Progress -Activity "LAS local admin remediation" -Status ("{0} {1} [{2}] {3}" -f $r.Computer,$r.Account,$r.Method,$r.Status) -PercentComplete ([math]::Round(($results.Count/$total)*100))');
-        lines.push('if($r.Status -eq "Failed"){Write-Warning ("FAILED {0} {1}: {2}" -f $r.Computer,$r.Account,$r.Error)}else{Write-Host ("{0} {1} [{2}] {3}" -f $r.Computer,$r.Account,$r.Method,$r.Status)}');
+        lines.push('Write-Host ("{0} {1} [{2}] {3}" -f $r.Computer,$r.Account,$r.Method,$r.Status)');
+        lines.push('if($r.Status -eq "Failed"){Write-Warning $r.Error}');
+        lines.push('Write-Progress -Activity "LAS remediation" -Status ("{0} [{1}] {2}" -f $r.Computer,$r.Method,$r.Status) -PercentComplete ([math]::Round(($results.Count/$total)*100))');
     }
-    lines.push('Write-Progress -Activity "LAS local admin remediation" -Completed');
+    lines.push('Write-Progress -Activity "LAS remediation" -Completed');
     lines.push('$results | Format-Table -AutoSize');
     lines.push('$csvPath=Join-Path $env:TEMP ("las-remediation-results-"+(Get-Date -Format "yyyyMMdd-HHmmss")+".csv")');
     lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Force -Path $csvPath');
     lines.push('Write-Host ("CSV: "+$csvPath)');
-
     var blob=new Blob([lines.join("\n")],{type:"text/plain;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");
-    a.href=url;
-    a.download="remediate_local_admins_v6_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";
-    document.body.appendChild(a);a.click();
-    setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
+    a.href=url;a.download="remediate_local_admins_v7_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";
+    document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
 }
+
 function runRemediationQueue(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
     if(!confirm(t("rem_confirm")+" "+remediationQueue.length+"?"))return;
-
     var total=remediationQueue.length,i=0,ok=0,fail=0,errs=[];
     $("remProgress").style.display="block";
-
     function updateProgress(current){
         var done=i,pct=total?Math.round(done*100/total):0;
         $("remProgressCount").innerHTML=done+" / "+total;
@@ -937,126 +877,68 @@ function runRemediationQueue(){
         $("remProgressCurrent").innerHTML=current||"";
         renderRemediationQueue();
     }
-
-    updateProgress("");
-
+    function finishItem(r,rr){
+        var st=rr.status||"Failed";
+        r.resultStatus=st;r.method=rr.method||"";r.attempts=rr.attempts||[];r.error=rr.error||"";
+        if(rr.ok===false||st==="Failed"||st==="StillPresent"){
+            fail++;r.status="fail";
+            errs.push(r.machine+" "+r.account+" ["+(r.method||"FAILED")+"]: "+(rr.error||st));
+            addLog(r.machine+" "+r.account+" ["+(r.method||"FAILED")+"] "+st+(rr.error?" — "+rr.error:""),"log-err",r.machine,false,null);
+        }else{
+            ok++;r.status="ok";
+            addLog(r.machine+" "+r.account+" ["+(r.method||"WinRM")+"] "+st,"log-ok",r.machine,false,null);
+        }
+        updateProgress(r.machine+" → "+r.account+" — "+(r.resultStatus||t("rem_failed"))+(r.method?(" ["+r.method+"]"):""));
+    }
     function step(){
         if(i>=total){
             $("remProgressCurrent").innerHTML=t("rem_done")+" — OK: "+ok+", Failed: "+fail;
-            $("remProgressBar").style.width="100%";
-            renderRemediationQueue();
-            alert(
-                t("rem_done")+". OK: "+ok+", Failed: "+fail+
-                (errs.length?("\n"+errs.slice(0,10).join("\n")):"")
-            );
+            $("remProgressBar").style.width="100%";renderRemediationQueue();
+            alert(t("rem_done")+". OK: "+ok+", Failed: "+fail+(errs.length?("\n"+errs.slice(0,10).join("\n")):""));
             return;
         }
-
-        var idx=i++,r=remediationQueue[idx];
-        r.status="running";
+        var r=remediationQueue[i++];r.status="running";
         updateProgress(r.machine+" → "+r.account);
-
         var x=new XMLHttpRequest();
         x.open("POST","/api/remediate/remove-local-admin",true);
-        x.timeout=45000;
-        x.setRequestHeader("Content-Type","application/json");
-
+        x.timeout=15000;x.setRequestHeader("Content-Type","application/json");
+        function poll(jobId,started){
+            if(Date.now()-started>90000){
+                finishItem(r,{ok:false,status:"Failed",method:"TIMEOUT",error:"remediation job exceeded 90 seconds"});step();return;
+            }
+            var p=new XMLHttpRequest();
+            p.open("GET","/api/remediate/job/"+encodeURIComponent(jobId),true);p.timeout=10000;
+            p.onreadystatechange=function(){
+                if(p.readyState!==4)return;
+                if(p.status===200){
+                    var rr={};try{rr=JSON.parse(p.responseText||"{}")}catch(e){}
+                    if(rr.state==="running"||rr.status==="Running"){
+                        updateProgress(r.machine+" → "+r.account+" — Удаление");
+                        setTimeout(function(){poll(jobId,started)},1000);return;
+                    }
+                    finishItem(r,rr);step();return;
+                }
+                setTimeout(function(){poll(jobId,started)},1500);
+            };
+            p.ontimeout=function(){setTimeout(function(){poll(jobId,started)},1500)};
+            p.onerror=function(){setTimeout(function(){poll(jobId,started)},1500)};
+            p.send();
+        }
         x.onreadystatechange=function(){
             if(x.readyState!==4)return;
-
-            if(x.status===200){
-                var rr={};
-                try{rr=JSON.parse(x.responseText||"{}")}catch(e){}
-
-                var st=rr.status||"Failed";
-                r.resultStatus=st;
-                r.method=rr.method||"";
-                r.attempts=rr.attempts||[];
-                r.error=rr.error||"";
-
-                if(rr.ok===false || st==="Failed" || st==="StillPresent"){
-                    fail++;
-                    r.status="fail";
-                    errs.push(
-                        r.machine+" "+r.account+
-                        " ["+(r.method||"FAILED")+"]: "+
-                        (rr.error||st)
-                    );
-                    addLog(
-                        r.machine+" "+r.account+" ["+(r.method||"FAILED")+"] "+st+
-                        (rr.error?" — "+rr.error:""),
-                        "log-err",r.machine,false,null
-                    );
-                }else{
-                    ok++;
-                    r.status="ok";
-                    addLog(
-                        r.machine+" "+r.account+" ["+(r.method||"WinRM")+"] "+st,
-                        "log-ok",r.machine,false,null
-                    );
-                }
-            }else{
-                fail++;
-                r.status="fail";
-                try{
-                    var er=JSON.parse(x.responseText||"{}");
-                    r.resultStatus=er.status||"Failed";
-                    r.method=(er.attempts&&er.attempts.length)?er.attempts[er.attempts.length-1].method:"FAILED";
-                    r.error=er.error||x.statusText||String(x.status);
-                    r.attempts=er.attempts||[];
-                    errs.push(r.machine+" "+r.account+" ["+r.method+"]: "+r.error);
-                }catch(e){
-                    r.resultStatus="Failed";
-                    r.method="FAILED";
-                    r.error=x.statusText||String(x.status);
-                    errs.push(r.machine+" "+r.account+": "+r.error);
-                }
-                addLog(
-                    r.machine+" "+r.account+" ["+r.method+"] Failed — "+r.error,
-                    "log-err",r.machine,false,null
-                );
+            if(x.status===202||x.status===200){
+                var rr={};try{rr=JSON.parse(x.responseText||"{}")}catch(e){}
+                if(rr.job_id){poll(rr.job_id,Date.now());return;}
+                finishItem(r,rr);step();return;
             }
-
-            var tail=r.method?(" ["+r.method+"]"):"";
-            updateProgress(
-                r.machine+" → "+r.account+" — "+(r.resultStatus||t("rem_failed"))+tail
-            );
-            step();
+            var er={};try{er=JSON.parse(x.responseText||"{}")}catch(e){}
+            finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:er.error||x.statusText||String(x.status)});step();
         };
-
-        x.ontimeout=function(){
-            fail++;
-            r.status="fail";
-            r.resultStatus="Failed";
-            r.method="HTTP";
-            r.error="timeout after 45s";
-            errs.push(r.machine+" "+r.account+" [HTTP]: timeout after 45s");
-            updateProgress(r.machine+" → "+r.account+" — Failed [HTTP timeout]");
-            step();
-        };
-
-        x.onerror=function(){
-            fail++;
-            r.status="fail";
-            r.resultStatus="Failed";
-            r.method="HTTP";
-            r.error="network error";
-            errs.push(r.machine+" "+r.account+" [HTTP]: network error");
-            updateProgress(r.machine+" → "+r.account+" — Failed [HTTP]");
-            step();
-        };
-
-        x.send(JSON.stringify({
-            machine:r.machine,
-            account:r.account,
-            group:r.group,
-            domain:val("remDomain"),
-            username:val("remUser"),
-            password:val("remPass")
-        }));
+        x.ontimeout=function(){finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"remediation request timeout"});step()};
+        x.onerror=function(){finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"network error"});step()};
+        x.send(JSON.stringify({machine:r.machine,account:r.account,group:r.group,domain:val("remDomain"),username:val("remUser"),password:val("remPass")}));
     }
-
-    step();
+    updateProgress("");step();
 }
 
 function renderRisky(){var machines=SD.risky_machines||[],details=SD.risky_details||{},risks=SD.machine_risks||{};$("riskyCount").innerHTML=machines.length;
