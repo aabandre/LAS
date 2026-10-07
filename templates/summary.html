@@ -839,12 +839,14 @@ function exportRemediationScript(){
         '  param([string]$Computer,[string]$Group,[string]$Member,[pscredential]$Credential)',
         '  $g=Get-LasAdminGroupAdsi $Computer $Group $Credential',
         '  $m=Get-LasAdsiMember $g $Computer $Member',
-        '  if(-not $m){return [pscustomobject]@{Status="AlreadyAbsent";Method="ADSI-RPC";Computer=$Computer;Account=$Member;Group=$g.Name;Error=""}}',
+        '  $groupName=try{[string]$g.psbase.InvokeGet("Name")}catch{[string]$g.Name}',
+        '  if(-not $groupName){$groupName=$Group}',
+        '  if(-not $m){return [pscustomobject]@{Status="AlreadyAbsent";Method="ADSI-RPC";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}}',
         '  $path=$m.GetType().InvokeMember("ADsPath","GetProperty",$null,$m,$null)',
         '  $g.Remove($path)',
         '  $left=Get-LasAdsiMember $g $Computer $Member',
         '  if($left){throw "Member is still present after ADSI/RPC removal"}',
-        '  return [pscustomobject]@{Status="Removed";Method="ADSI-RPC";Computer=$Computer;Account=$Member;Group=$g.Name;Error=""}',
+        '  return [pscustomobject]@{Status="Removed";Method="ADSI-RPC";Computer=$Computer;Account=$Member;Group=$groupName;Error=""}',
         '}',
         '',
         'function Remove-LasWinRm {',
@@ -956,6 +958,7 @@ function runRemediationQueue(){
 
         var x=new XMLHttpRequest();
         x.open("POST","/api/remediate/remove-local-admin",true);
+        x.timeout=45000;
         x.setRequestHeader("Content-Type","application/json");
 
         x.onreadystatechange=function(){
@@ -1018,6 +1021,17 @@ function runRemediationQueue(){
             updateProgress(
                 r.machine+" → "+r.account+" — "+(r.resultStatus||t("rem_failed"))+tail
             );
+            step();
+        };
+
+        x.ontimeout=function(){
+            fail++;
+            r.status="fail";
+            r.resultStatus="Failed";
+            r.method="HTTP";
+            r.error="timeout after 45s";
+            errs.push(r.machine+" "+r.account+" [HTTP]: timeout after 45s");
+            updateProgress(r.machine+" → "+r.account+" — Failed [HTTP timeout]");
             step();
         };
 
