@@ -918,8 +918,10 @@ function exportRemediationScript(){
 function runRemediationQueue(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
     if(!confirm(t("rem_confirm")+" "+remediationQueue.length+"?"))return;
+
     var total=remediationQueue.length,i=0,ok=0,fail=0,errs=[];
     $("remProgress").style.display="block";
+
     function updateProgress(current){
         var done=i,pct=total?Math.round(done*100/total):0;
         $("remProgressCount").innerHTML=done+" / "+total;
@@ -927,37 +929,116 @@ function runRemediationQueue(){
         $("remProgressCurrent").innerHTML=current||"";
         renderRemediationQueue();
     }
+
     updateProgress("");
+
     function step(){
         if(i>=total){
             $("remProgressCurrent").innerHTML=t("rem_done")+" — OK: "+ok+", Failed: "+fail;
             $("remProgressBar").style.width="100%";
             renderRemediationQueue();
-            alert(t("rem_done")+". OK: "+ok+", Failed: "+fail+(errs.length?("\n"+errs.slice(0,5).join("\n")):""));
+            alert(
+                t("rem_done")+". OK: "+ok+", Failed: "+fail+
+                (errs.length?("\n"+errs.slice(0,10).join("\n")):"")
+            );
             return;
         }
-        var idx=i++,r=remediationQueue[idx];r.status="running";
+
+        var idx=i++,r=remediationQueue[idx];
+        r.status="running";
         updateProgress(r.machine+" → "+r.account);
+
         var x=new XMLHttpRequest();
         x.open("POST","/api/remediate/remove-local-admin",true);
         x.setRequestHeader("Content-Type","application/json");
+
         x.onreadystatechange=function(){
             if(x.readyState!==4)return;
+
             if(x.status===200){
-                ok++;
-                try{var rr=JSON.parse(x.responseText||"{}"),st=rr.status||"Removed";r.status=(st==="Failed"||st==="StillPresent")?"fail":"ok";r.resultStatus=st;addLog((r.machine+" "+r.account+" ["+(rr.method||"WinRM")+"] "+st),"log-ok",r.machine,false,null);}catch(e){r.status="ok";r.resultStatus="Removed";}
+                var rr={};
+                try{rr=JSON.parse(x.responseText||"{}")}catch(e){}
+
+                var st=rr.status||"Failed";
+                r.resultStatus=st;
+                r.method=rr.method||"";
+                r.attempts=rr.attempts||[];
+                r.error=rr.error||"";
+
+                if(rr.ok===false || st==="Failed" || st==="StillPresent"){
+                    fail++;
+                    r.status="fail";
+                    errs.push(
+                        r.machine+" "+r.account+
+                        " ["+(r.method||"FAILED")+"]: "+
+                        (rr.error||st)
+                    );
+                    addLog(
+                        r.machine+" "+r.account+" ["+(r.method||"FAILED")+"] "+st+
+                        (rr.error?" — "+rr.error:""),
+                        "log-err",r.machine,false,null
+                    );
+                }else{
+                    ok++;
+                    r.status="ok";
+                    addLog(
+                        r.machine+" "+r.account+" ["+(r.method||"WinRM")+"] "+st,
+                        "log-ok",r.machine,false,null
+                    );
+                }
             }else{
-                fail++;r.status="fail";
-                try{var er=JSON.parse(x.responseText||"{}");errs.push((r.machine+" "+r.account+": "+(er.error||x.statusText||x.status)));}catch(e){errs.push(r.machine+" "+r.account+": "+x.status);}
+                fail++;
+                r.status="fail";
+                try{
+                    var er=JSON.parse(x.responseText||"{}");
+                    r.resultStatus=er.status||"Failed";
+                    r.method=(er.attempts&&er.attempts.length)?er.attempts[er.attempts.length-1].method:"FAILED";
+                    r.error=er.error||x.statusText||String(x.status);
+                    r.attempts=er.attempts||[];
+                    errs.push(r.machine+" "+r.account+" ["+r.method+"]: "+r.error);
+                }catch(e){
+                    r.resultStatus="Failed";
+                    r.method="FAILED";
+                    r.error=x.statusText||String(x.status);
+                    errs.push(r.machine+" "+r.account+": "+r.error);
+                }
+                addLog(
+                    r.machine+" "+r.account+" ["+r.method+"] Failed — "+r.error,
+                    "log-err",r.machine,false,null
+                );
             }
-            updateProgress(r.machine+" → "+r.account+" — "+(r.resultStatus||t("rem_failed")));
+
+            var tail=r.method?(" ["+r.method+"]"):"";
+            updateProgress(
+                r.machine+" → "+r.account+" — "+(r.resultStatus||t("rem_failed"))+tail
+            );
             step();
         };
-        x.onerror=function(){fail++;r.status="fail";errs.push(r.machine+" "+r.account+": network error");updateProgress(r.machine+" → "+r.account+" — "+t("rem_failed"));step();};
-        x.send(JSON.stringify({machine:r.machine,account:r.account,group:r.group,domain:val("remDomain"),username:val("remUser"),password:val("remPass")}));
+
+        x.onerror=function(){
+            fail++;
+            r.status="fail";
+            r.resultStatus="Failed";
+            r.method="HTTP";
+            r.error="network error";
+            errs.push(r.machine+" "+r.account+" [HTTP]: network error");
+            updateProgress(r.machine+" → "+r.account+" — Failed [HTTP]");
+            step();
+        };
+
+        x.send(JSON.stringify({
+            machine:r.machine,
+            account:r.account,
+            group:r.group,
+            domain:val("remDomain"),
+            username:val("remUser"),
+            password:val("remPass")
+        }));
     }
+
     step();
 }
+
 function renderRisky(){var machines=SD.risky_machines||[],details=SD.risky_details||{},risks=SD.machine_risks||{};$("riskyCount").innerHTML=machines.length;
     if(!machines.length){$("riskyGrid").innerHTML="<div style=\"padding:20px;color:#5cb85c;font-weight:bold\">"+t("all_clean")+"</div>";return}
     var h="";for(var i=0;i<machines.length;i++){var m=machines[i],mb=details[m]||[],rk=risks[m]||{},sev=rk.severity||"unknown",sc=rk.score||0;
