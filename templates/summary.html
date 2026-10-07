@@ -791,39 +791,55 @@ function renderRemediationQueue(){
 function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
 function exportRemediationScript(){
     if(!remediationQueue.length){alert(t("rem_empty"));return;}
+
     var lines=[
-        '# LAS remediation v4 - WinRM + remote ADSI/RPC fallback + verification',
+        '# LAS remediation v5 - WinRM + SID-based ADSI/RPC fallback',
+        '# Each target is emitted as one simple command line; results are exported to CSV.',
         'Set-StrictMode -Version Latest',
         '$ErrorActionPreference = "Stop"',
         '',
-        'function Get-LasRemoteGroup {',
-        '  param([string]$Computer,[string]$Group)',
-        '  $path = "WinNT://" + $Computer + "/" + $Group + ",group"',
-        '  return [ADSI]$path',
-        '}',
-        '',
-        'function Test-LasMember {',
-        '  param([string]$Computer,[string]$Group,[string]$Member)',
+        'function Test-LasMemberAdsi {',
+        '  param([object]$GroupObj,[string]$Computer,[string]$Member)',
         '  try {',
-        '    $groupObj = Get-LasRemoteGroup $Computer $Group',
-        '    $short = ($Member -split "\\\\")[-1]',
-        '    foreach($item in @($groupObj.psbase.Invoke("Members"))){',
+        '    $short = ($Member -split "\\")[-1]',
+        '    foreach($item in @($GroupObj.psbase.Invoke("Members"))){',
         '      $name = $item.GetType().InvokeMember("Name","GetProperty",$null,$item,$null)',
         '      $path = $item.GetType().InvokeMember("ADsPath","GetProperty",$null,$item,$null)',
         '      $domain = ""',
         '      if("$path" -match "WinNT://([^/]+)/"){ $domain=$matches[1] }',
         '      $full = if($domain -and $domain -ne $Computer){$domain + "\\" + $name}else{$name}',
-        '      if($full -ieq $Member -or "$name" -ieq $short){return $true}',
+        '      if("$full" -ieq $Member -or "$name" -ieq $short){ return $true }',
         '    }',
         '    return $false',
         '  } catch { return $null }',
         '}',
         '',
-        'function Remove-LasMemberRpc {',
+        'function Get-LasAdministratorsAdsi {',
+        '  param([string]$Computer,[string]$RequestedGroup)',
+        '  $root = [ADSI]("WinNT://$Computer")',
+        '  $fallbackNames = @($RequestedGroup,"Administrators","Администраторы") | Where-Object { $_ } | Select-Object -Unique',
+        '  foreach($child in @($root.psbase.Children)){',
+        '    if($child.psbase.SchemaClassName -ne "Group"){ continue }',
+        '    $sid = $null',
+        '    try {',
+        '      $sidBytes = $child.psbase.InvokeGet("objectSid")',
+        '      if($sidBytes){ $sid=(New-Object System.Security.Principal.SecurityIdentifier($sidBytes,0)).Value }',
+        '    } catch {}',
+        '    if($sid -eq "S-1-5-32-544"){ return $child }',
+        '    foreach($n in $fallbackNames){',
+        '      if("$($child.Name)" -ieq "$n"){ return $child }',
+        '    }',
+        '  }',
+        '  throw "Built-in Administrators group not found via ADSI on $Computer"',
+        '}',
+        '',
+        'function Remove-LasMemberAdsi {',
         '  param([string]$Computer,[string]$Group,[string]$Member)',
-        '  $groupObj = Get-LasRemoteGroup $Computer $Group',
-        '  $short = ($Member -split "\\\\")[-1]',
-        '  $targetPath = "WinNT://" + (($Member -replace "\\\\","/"))',
+        '  $groupObj = Get-LasAdministratorsAdsi $Computer $Group',
+        '  $before = Test-LasMemberAdsi $groupObj $Computer $Member',
+        '  if($before -eq $false){ return "AlreadyAbsent" }',
+        '  if($before -eq $null){ throw "Unable to enumerate members of the local Administrators group on $Computer" }',
+        '  $short = ($Member -split "\\")[-1]',
         '  $removed = $false',
         '  foreach($item in @($groupObj.psbase.Invoke("Members"))){',
         '    $name = $item.GetType().InvokeMember("Name","GetProperty",$null,$item,$null)',
@@ -831,55 +847,96 @@ function exportRemediationScript(){
         '    $domain = ""',
         '    if("$path" -match "WinNT://([^/]+)/"){ $domain=$matches[1] }',
         '    $full = if($domain -and $domain -ne $Computer){$domain + "\\" + $name}else{$name}',
-        '    if($full -ieq $Member -or "$name" -ieq $short){',
+        '    if("$full" -ieq $Member -or "$name" -ieq $short){',
         '      $groupObj.Remove($path)',
         '      $removed = $true',
         '      break',
         '    }',
         '  }',
-        '  if(-not $removed){return "AlreadyAbsent"}',
-        '  $verify=Test-LasMember $Computer $Group $Member',
-        '  if($verify -eq $true){throw "Member is still present after remote ADSI deletion"}',
-        '  if($verify -eq $false){return "Removed"}',
+        '  if(-not $removed){ return "AlreadyAbsent" }',
+        '  $after = Test-LasMemberAdsi $groupObj $Computer $Member',
+        '  if($after -eq $true){ throw "Member is still present after ADSI/RPC deletion" }',
+        '  if($after -eq $false){ return "Removed" }',
         '  return "RemovedUnverified"',
         '}',
         '',
         'function Remove-LasMemberWinRm {',
         '  param([string]$Computer,[string]$Group,[string]$Member)',
-        '  $script={param($g,$m);$ErrorActionPreference="Stop";if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){Remove-LocalGroupMember -Group $g -Member $m -ErrorAction Stop}else{$adsi=[ADSI]("WinNT://./"+$g+",group");try{$adsi.Remove("WinNT://"+$m.Replace("\\\\","/"))}catch{$short=$m.Split("\\\\")[-1];$adsi.Remove("WinNT://"+$short)}}}',
+        '  $script = {',
+        '    param($RequestedGroup,$TargetMember)',
+        '    $ErrorActionPreference = "Stop"',
+        '    $short = ($TargetMember -split "\\")[-1]',
+        '    if(Get-Command Get-LocalGroup -ErrorAction SilentlyContinue){',
+        '      $admins = Get-LocalGroup -SID ([System.Security.Principal.SecurityIdentifier]"S-1-5-32-544") -ErrorAction Stop',
+        '      $members = @(Get-LocalGroupMember -Group $admins -ErrorAction Stop)',
+        '      $exists = $false',
+        '      foreach($item in $members){',
+        '        $name = [string]$item.Name',
+        '        if($name -ieq $TargetMember -or $name -ieq $short){$exists=$true;break}',
+        '      }',
+        '      if(-not $exists){ return "AlreadyAbsent" }',
+        '      Remove-LocalGroupMember -Group $admins -Member $TargetMember -ErrorAction Stop',
+        '      $left = @(Get-LocalGroupMember -Group $admins -ErrorAction Stop)',
+        '      foreach($item in $left){',
+        '        $name = [string]$item.Name',
+        '        if($name -ieq $TargetMember -or $name -ieq $short){ throw "Member is still present after WinRM deletion" }',
+        '      }',
+        '      return "Removed"',
+        '    }',
+        '    $adsi = [ADSI]"WinNT://./Administrators,group"',
+        '    try {',
+        '      $adsi.Remove("WinNT://" + $TargetMember.Replace("\","/"))',
+        '    } catch {',
+        '      $adsi.Remove("WinNT://" + $short)',
+        '    }',
+        '    return "RemovedUnverified"',
+        '  }',
         '  Invoke-Command -ComputerName $Computer -ScriptBlock $script -ArgumentList $Group,$Member -ErrorAction Stop',
-        '  $verify=Test-LasMember $Computer $Group $Member',
-        '  if($verify -eq $true){throw "Member is still present after WinRM deletion"}',
-        '  if($verify -eq $false){return "Removed"}',
-        '  return "RemovedUnverified"',
         '}',
         '',
-        '$results=@()'
+        'function Remove-LasMemberTarget {',
+        '  param([string]$Computer,[string]$Group,[string]$Member)',
+        '  $winrmError = ""',
+        '  try {',
+        '    $status = Remove-LasMemberWinRm $Computer $Group $Member',
+        '    return [pscustomobject]@{Computer=$Computer;Account=$Member;Group=$Group;Method="WinRM";Status=$status;Error=""}',
+        '  } catch {',
+        '    $winrmError = $_.Exception.Message',
+        '  }',
+        '  try {',
+        '    $status = Remove-LasMemberAdsi $Computer $Group $Member',
+        '    return [pscustomobject]@{Computer=$Computer;Account=$Member;Group=$Group;Method="ADSI-RPC";Status=$status;Error=$winrmError}',
+        '  } catch {',
+        '    $rpcError = $_.Exception.Message',
+        '    return [pscustomobject]@{Computer=$Computer;Account=$Member;Group=$Group;Method="FAILED";Status="Failed";Error=("$winrmError | ADSI-RPC: $rpcError")}',
+        '  }',
+        '}',
+        '',
+        '$results=@()',
+        '$total=0'
     ];
+
     for(var i=0;i<remediationQueue.length;i++){
         var r=remediationQueue[i];
         var m=r.machine.replace(/'/g,"''"),
             g=r.group.replace(/'/g,"''"),
             a=r.account.replace(/'/g,"''");
 
-        var psLine =
-            'try{$computer=\'' + m + '\'; $group=\'' + g + '\'; $member=\'' + a + '\';$winrmError="";' +
-            'try{$status=Remove-LasMemberWinRm $computer $group $member;$method="WinRM"}' +
-            'catch{$winrmError=$_.Exception.Message;' +
-            'try{$status=Remove-LasMemberRpc $computer $group $member;$method="ADSI-RPC"}' +
-            'catch{throw ($winrmError+" | ADSI-RPC: "+$_.Exception.Message)}}' +
-            ';$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method=$method;Status=$status;Error=$(if($winrmError){$winrmError}else{""})}' +
-            ';Write-Host ("{0} {1} [{2}] {3}" -f $computer,$member,$method,$status)}' +
-            'catch{$err=$_.Exception.Message;' +
-            '$results+=[pscustomobject]@{Computer=$computer;Account=$member;Group=$group;Method="FAILED";Status="Failed";Error=$err}' +
-            ';Write-Warning ("FAILED {0} {1}: {2}" -f $computer,$member,$err)}';
-
-        lines.push(psLine);
+        lines.push('$total++');
+        lines.push('$current=Remove-LasMemberTarget -Computer \''+m+'\' -Group \''+g+'\' -Member \''+a+'\'');
+        lines.push('$results += $current');
+        lines.push('Write-Progress -Activity "LAS local admin remediation" -Status ("{0} {1} [{2}] {3}" -f $current.Computer,$current.Account,$current.Method,$current.Status) -PercentComplete ([math]::Min(100,[math]::Round(($results.Count/$total)*100)))');
+        lines.push('Write-Host ("{0} {1} [{2}] {3}" -f $current.Computer,$current.Account,$current.Method,$current.Status)');
     }
+
+    lines.push('Write-Progress -Activity "LAS local admin remediation" -Completed');
     lines.push('$results | Format-Table -AutoSize');
     lines.push('$results | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $PWD "las-remediation-results.csv")');
+
     var blob=new Blob([lines.join("\n")],{type:"text/plain;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");
-    a.href=url;a.download="remediate_local_admins_v4_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";document.body.appendChild(a);a.click();
+    a.href=url;
+    a.download="remediate_local_admins_v5_"+new Date().toISOString().replace(/[:.]/g,"-")+".ps1";
+    document.body.appendChild(a);a.click();
     setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},50);
 }
 function runRemediationQueue(){
