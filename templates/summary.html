@@ -807,7 +807,7 @@ function exportRemediationScript(){
         '    param($RequestedGroup,$TargetMember)',
         '    $ErrorActionPreference="Stop"',
         '    $groupName=$null',
-        '    try{$g=Get-WmiObject Win32_Group -Filter "SID=''S-1-5-32-544''" -ErrorAction Stop | Select-Object -First 1;if($g){$groupName=[string]$g.Name}}catch{}',
+        "    try{\$g=Get-WmiObject Win32_Group -Filter \"SID='S-1-5-32-544'\" -ErrorAction Stop | Select-Object -First 1;if(\$g){\$groupName=[string]\$g.Name}}catch{}",
         '    if(-not $groupName -and (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)){try{$lg=Get-LocalGroup | Where-Object {$_.Name -ieq $RequestedGroup} | Select-Object -First 1;if($lg){$groupName=[string]$lg.Name}}catch{}}',
         '    if(-not $groupName){throw "Local Administrators group not found"}',
         '    $present=$false',
