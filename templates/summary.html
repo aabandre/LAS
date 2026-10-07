@@ -913,8 +913,8 @@ function exportRemediationScript(){
         '}',
         '',
         '$results=@()',
-        '$total=7'
     ];
+    lines.push('$total='+remediationQueue.length);
 
     for(var i=0;i<remediationQueue.length;i++){
         var r=remediationQueue[i];
