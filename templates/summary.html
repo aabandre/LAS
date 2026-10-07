@@ -810,7 +810,7 @@ function exportRemediationScript(){
         'using System;',
         'using System.Runtime.InteropServices;',
         'public static class LasNetApi {',
-        '  [DllImport("Netapi32.dll", CharSet=CharSet.Unicode)]',
+        '  [DllImport("Netapi32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]',
         '  public static extern int NetLocalGroupDelMembers(string servername,string localgroupname,int level,IntPtr buf,int totalentries);',
         '}',
         '"@',
