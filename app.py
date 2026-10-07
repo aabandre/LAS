@@ -3493,6 +3493,12 @@ def _verify_local_group_member_rpc(machine, group, account):
 
 
 def _remove_local_group_member_rpc(machine, group, account):
+    """
+    Remove by the member SID (NetAPI level 0) whenever possible.
+
+    This is important for stale/dead AD SIDs: a SID stored in the local SAM
+    does not need to resolve back to an AD object in order to be removed.
+    """
     if not WIN32NET_AVAILABLE:
         return None
 
@@ -3502,61 +3508,83 @@ def _remove_local_group_member_rpc(machine, group, account):
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
         requested_sid = _member_sid_for_machine(machine, requested)
-        resolved_name = None
-        resolved_sid = None
 
+        target_item = None
         for item in _iter_local_group_members_rpc(server, group_name):
             if _rpc_member_matches(item, requested, requested_sid):
-                resolved_name = str(item.get("domainandname") or "").strip()
-                resolved_sid = _remediation_sid_text(item.get("sid"))
+                target_item = item
                 break
 
-        if not resolved_name:
+        if target_item is None:
             return {
                 "ok": True,
-                "method": "RPC",
+                "method": "RPC-NetAPI",
                 "status": "AlreadyAbsent",
                 "group_resolved": group_name,
             }
 
-        # Remove by the exact DOMAIN\\name returned by the target.
-        # This is supported by the pywin32 NetLocalGroupDelMembers wrapper
-        # and avoids localized group-name and account-name ambiguity.
-        win32net.NetLocalGroupDelMembers(
-            server, group_name, 3, [{"domainandname": resolved_name}]
-        )
+        target_sid = _remediation_sid_text(target_item.get("sid"))
+        if target_sid and WIN32SECURITY_AVAILABLE:
+            sid_obj = win32security.ConvertStringSidToSid(target_sid)
+            # NetLocalGroupDelMembers level 0 removes by SID and therefore
+            # works even when LookupAccountSid/AD resolution fails.
+            win32net.NetLocalGroupDelMembers(
+                server, group_name, 0, [{"sid": sid_obj}]
+            )
+        else:
+            resolved_name = str(target_item.get("domainandname") or "").strip()
+            if not resolved_name:
+                raise RuntimeError(
+                    "Target member has no SID and no resolvable account name"
+                )
+            win32net.NetLocalGroupDelMembers(
+                server, group_name, 3, [{"domainandname": resolved_name}]
+            )
 
-        verified = _verify_local_group_member_rpc(machine, group_name, requested)
+        verified = _verify_local_group_member_rpc(machine, group_name, target_sid or requested)
         if verified is False:
             return {
-                "ok": True, "method": "RPC", "status": "Removed",
-                "account": resolved_name, "group_resolved": group_name,
+                "ok": True,
+                "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
+                "status": "Removed",
+                "account": requested,
+                "sid": target_sid,
+                "group_resolved": group_name,
             }
         if verified is True:
             return {
-                "ok": False, "method": "RPC", "status": "StillPresent",
-                "account": resolved_name, "group_resolved": group_name,
-                "error": "Member is still present after RPC removal",
+                "ok": False,
+                "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
+                "status": "StillPresent",
+                "account": requested,
+                "sid": target_sid,
+                "group_resolved": group_name,
+                "error": "Member is still present after NetAPI removal",
             }
         return {
-            "ok": True, "method": "RPC", "status": "RemovedUnverified",
-            "account": resolved_name, "group_resolved": group_name,
+            "ok": True,
+            "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
+            "status": "RemovedUnverified",
+            "account": requested,
+            "sid": target_sid,
+            "group_resolved": group_name,
         }
     except Exception as e:
         return {
-            "ok": False, "method": "RPC", "status": "Failed",
+            "ok": False,
+            "method": "RPC-NetAPI",
+            "status": "Failed",
             "error": str(e)[:1000],
         }
 
 
 def _remove_local_group_member_wmi(machine, group, account, username="", password="", domain=""):
     """
-    Remove a local Administrators member through WMI/DCOM.
+    Credentialed WMI/DCOM fallback.
 
-    This deliberately avoids ADSI and NetLocalGroupDelMembers for the UI path:
-    the WMI connection uses the credentials entered in the remediation form,
-    and Win32_Process.Create runs the invariant 'net localgroup ... /delete'
-    on the target. Membership is then verified through Win32_Group associations.
+    The actual mutation is performed on the target with NetAPI level 0 via a
+    short 64-bit PowerShell helper. The member is addressed by SID, so an
+    orphaned/dead AD SID can be removed without resolving the AD account.
     """
     if not WMI_AVAILABLE:
         return None
@@ -3589,6 +3617,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
 
         g = groups[0]
         group_name = str(getattr(g, "Name", "") or group)
+
         target_sid = _member_sid_for_machine(short_host, requested)
 
         def get_members():
@@ -3611,7 +3640,10 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
             if target_sid and sid and sid.upper() == target_sid.upper():
                 target = (full, name, sid)
                 break
-            if full.casefold() == requested.casefold() or name.casefold() == requested.rsplit("\\", 1)[-1].casefold():
+            if (
+                full.casefold() == requested.casefold()
+                or name.casefold() == requested.rsplit("\\", 1)[-1].casefold()
+            ):
                 target = (full, name, sid)
                 break
 
@@ -3621,13 +3653,73 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
                 "group_resolved": group_name,
             }
 
-        # 'net localgroup' is the Windows-native local SAM operation. The
-        # process is created on the target by WMI, so no WinRM is required.
-        def q(v):
-            return '"' + str(v).replace('"', '\\\"') + '"'
+        target_sid = target[2] or target_sid
+        if not target_sid:
+            return {
+                "ok": False, "method": "WMI", "status": "Failed",
+                "group_resolved": group_name,
+                "error": "Unable to obtain target member SID",
+            }
 
-        command = 'cmd.exe /d /c net localgroup {0} {1} /delete'.format(
-            q(group_name), q(target[0] or requested)
+        # Run on the target. Remove-LocalGroupMember accepts SID members, but
+        # older hosts may not have Microsoft.PowerShell.LocalAccounts, so the
+        # helper falls back to NetLocalGroupDelMembers level 0.
+        ps = StringBuilder = r'''
+$ErrorActionPreference = "Stop"
+$groupName = __GROUP__
+$memberSidText = __SID__
+$sid = New-Object System.Security.Principal.SecurityIdentifier($memberSidText)
+
+try {
+    if (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue) {
+        Remove-LocalGroupMember -Name $groupName -Member $sid -Confirm:$false -ErrorAction Stop
+        exit 0
+    }
+
+    if (-not ("LasNetApi" -as [type])) {
+        Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class LasNetApi {
+    [DllImport("Netapi32.dll", CharSet = CharSet.Unicode)]
+    public static extern int NetLocalGroupDelMembers(
+        string servername,
+        string localgroupname,
+        int level,
+        IntPtr buf,
+        int totalentries);
+}
+"@
+    }
+
+    $bytes = New-Object byte[] $sid.BinaryLength
+    $sid.GetBinaryForm($bytes, 0)
+    $sidPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+    $bufPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal([IntPtr]::Size)
+    try {
+        [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $sidPtr, $bytes.Length)
+        [Runtime.InteropServices.Marshal]::WriteIntPtr($bufPtr, $sidPtr)
+        $rc = [LasNetApi]::NetLocalGroupDelMembers($null, $groupName, 0, $bufPtr, 1)
+        if ([int]$rc -ne 0) {
+            throw ("NetLocalGroupDelMembers failed with Win32 error {0}" -f [int]$rc)
+        }
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($bufPtr)
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($sidPtr)
+    }
+    exit 0
+}
+catch {
+    exit 1
+}
+'''
+        ps = ps.replace("__GROUP__", json.dumps(group_name)).replace("__SID__", json.dumps(target_sid))
+
+        encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
+        command = (
+            "powershell.exe -NoLogo -NoProfile -NonInteractive "
+            "-ExecutionPolicy Bypass -EncodedCommand " + encoded
         )
         result = c.Win32_Process.Create(CommandLine=command)
         pid = int(getattr(result, "ProcessId", 0) or 0)
@@ -3639,9 +3731,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
                 "error": "Win32_Process.Create failed: return value {}".format(ret),
             }
 
-        # Wait briefly for net.exe, but never block the web request itself:
-        # this function runs in remediation_executor.
-        deadline = time.time() + 15
+        deadline = time.time() + 20
         while time.time() < deadline:
             try:
                 if not c.Win32_Process(ProcessId=pid):
@@ -3652,22 +3742,18 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
 
         left = get_members()
         for full, name, sid in left:
-            if target_sid and sid and sid.upper() == target_sid.upper():
+            if sid and sid.upper() == target_sid.upper():
                 return {
-                    "ok": False, "method": "WMI", "status": "StillPresent",
+                    "ok": False, "method": "WMI-NetAPI-SID", "status": "StillPresent",
                     "group_resolved": group_name,
-                    "error": "Member is still present after WMI/net localgroup removal",
-                }
-            if full.casefold() == requested.casefold() or name.casefold() == requested.rsplit("\\", 1)[-1].casefold():
-                return {
-                    "ok": False, "method": "WMI", "status": "StillPresent",
-                    "group_resolved": group_name,
-                    "error": "Member is still present after WMI/net localgroup removal",
+                    "sid": target_sid,
+                    "error": "Member is still present after WMI/NetAPI removal",
                 }
 
         return {
-            "ok": True, "method": "WMI", "status": "Removed",
-            "account": target[0] or requested,
+            "ok": True, "method": "WMI-NetAPI-SID", "status": "Removed",
+            "account": requested,
+            "sid": target_sid,
             "group_resolved": group_name,
         }
     except Exception as e:
@@ -3682,9 +3768,8 @@ def _build_remediation_winrm_script(group, account):
     account_json = json.dumps(str(account or ""), ensure_ascii=False)
     group_sid = _remediation_group_sid(group) or "S-1-5-32-544"
 
-    # Do the actual mutation with the native NetLocalGroupDelMembers path
-    # exposed by "net localgroup". This does not depend on the
-    # Microsoft.PowerShell.LocalAccounts module being installed.
+    # The target SID is the authoritative identity. This handles orphaned AD
+    # SIDs that cannot be translated to DOMAIN\name.
     return (
         "$ErrorActionPreference='Stop';"
         "$requestedGroup=" + group_json + ";"
@@ -3695,55 +3780,80 @@ def _build_remediation_winrm_script(group, account):
         "  if($g){$groupName=[string]$g.Name}"
         "}catch{};"
         "if(-not $groupName -and (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)){"
-        "  $lg=Get-LocalGroup -ErrorAction Stop | Where-Object {$_.Name -ieq $requestedGroup} | Select-Object -First 1;"
-        "  if($lg){$groupName=[string]$lg.Name}"
+        "  try{$lg=Get-LocalGroup | Where-Object {$_.Name -ieq $requestedGroup} | Select-Object -First 1;if($lg){$groupName=[string]$lg.Name}}catch{}"
         "};"
         "if(-not $groupName){throw ('Local group not found: '+$requestedGroup)};"
+        "$requestedSid=$null;"
+        "if($requestedMember -match '^S-[0-9-]+$'){$requestedSid=$requestedMember}"
+        "else{"
+        "  try{$requestedSid=([System.Security.Principal.NTAccount]$requestedMember).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{}"
+        "};"
+        "$targetSid=$null;"
+        "$targetName=$requestedMember;"
+        "try{"
+        "  if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "    foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){"
+        "      $msid=if($m.SID){$m.SID.Value}else{''};"
+        "      $mname=[string]$m.Name;"
+        "      if(($requestedSid -and $msid -ieq $requestedSid) -or ($mname -ieq $requestedMember) -or ($mname -split [char]92)[-1] -ieq (($requestedMember -split [char]92)[-1])){"
+        "        $targetSid=$msid;if($mname){$targetName=$mname};break"
+        "      }"
+        "    }"
+        "  }"
+        "}catch{};"
+        "if(-not $targetSid -and $requestedSid){$targetSid=$requestedSid};"
+        "if(-not $targetSid){throw ('Unable to resolve member SID: '+$requestedMember)};"
         "$present=$false;"
-        "if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "try{"
+        "  if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "    foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){"
+        "      if($m.SID -and $m.SID.Value -ieq $targetSid){$present=$true;break}"
+        "    }"
+        "  }"
+        "}catch{};"
+        "if(-not $present){"
         "  try{"
-        "    $requestedSid=$null;"
-        "    try{$requestedSid=(New-Object System.Security.Principal.NTAccount($requestedMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{};"
-        "    $members=@(Get-LocalGroupMember -Group $groupName -ErrorAction Stop);"
-        "    foreach($m in $members){"
-        "      if(($requestedSid -and $m.SID -and $m.SID.Value -eq $requestedSid.Value) -or ([string]$m.Name -ieq $requestedMember) -or (([string]$m.Name).Split('\\')[-1] -ieq ($requestedMember -split '\\')[-1])){$present=$true;break}"
+        "    foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){"
+        "      $pc=[string]$rel.PartComponent;"
+        "      if($pc -match ('SID=\"\"{0}\"\"' -f [regex]::Escape($targetSid))){$present=$true;break}"
         "    }"
         "  }catch{}"
         "};"
-        "if(-not $present){"
-        "  try{"
-        "    $rels=@(Get-WmiObject Win32_GroupUser -ErrorAction Stop);"
-        "    $short=($requestedMember -split '\\')[-1];"
-        "    foreach($rel in $rels){"
-        "      $gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;"
-        "      if($gc -match ('Name=""{0}""' -f [regex]::Escape($groupName)) -and $pc -match ('Name=""{0}""' -f [regex]::Escape($short))){$present=$true;break}"
-        "    }"
-        "  }catch{}"
+        "if(-not $present){return ('LAS-RESULT:'+(@{Status='AlreadyAbsent';Group=$groupName;Account=$targetName;SID=$targetSid} | ConvertTo-Json -Compress))};"
+        "if(-not ('LasNetApi' -as [type])){"
+        "  Add-Type @'"
+        "using System;"
+        "using System.Runtime.InteropServices;"
+        "public static class LasNetApi {"
+        "  [DllImport(\"Netapi32.dll\", CharSet=CharSet.Unicode)]"
+        "  public static extern int NetLocalGroupDelMembers(string servername,string localgroupname,int level,IntPtr buf,int totalentries);"
+        "}"
+        "'@"
         "};"
-        "if(-not $present){"
-        "  return ('LAS-RESULT:'+(@{Status='AlreadyAbsent';Group=$groupName;Account=$requestedMember} | ConvertTo-Json -Compress))"
+        "$sidObj=New-Object System.Security.Principal.SecurityIdentifier($targetSid);"
+        "$bytes=New-Object byte[] $sidObj.BinaryLength;"
+        "$sidObj.GetBinaryForm($bytes,0);"
+        "$sidPtr=[Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length);"
+        "$bufPtr=[Runtime.InteropServices.Marshal]::AllocHGlobal([IntPtr]::Size);"
+        "try{"
+        "  [Runtime.InteropServices.Marshal]::Copy($bytes,0,$sidPtr,$bytes.Length);"
+        "  [Runtime.InteropServices.Marshal]::WriteIntPtr($bufPtr,$sidPtr);"
+        "  $rc=[LasNetApi]::NetLocalGroupDelMembers($null,$groupName,0,$bufPtr,1);"
+        "  if([int]$rc -ne 0){throw ('NetLocalGroupDelMembers failed with Win32 error '+[int]$rc)}"
+        "}finally{"
+        "  [Runtime.InteropServices.Marshal]::FreeHGlobal($bufPtr);"
+        "  [Runtime.InteropServices.Marshal]::FreeHGlobal($sidPtr)"
         "};"
-        "$out=& net.exe localgroup $groupName $requestedMember /delete 2>&1;"
-        "$rc=[int]$LASTEXITCODE;"
-        "if($rc -ne 0){throw ('net localgroup failed with exit code '+$rc+': '+([string]($out -join ' ')))};"
-        "Start-Sleep -Milliseconds 700;"
+        "Start-Sleep -Milliseconds 500;"
         "$still=$false;"
-        "if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
-        "  try{"
-        "    $requestedSid=$null;"
-        "    try{$requestedSid=(New-Object System.Security.Principal.NTAccount($requestedMember)).Translate([System.Security.Principal.SecurityIdentifier])}catch{};"
-        "    foreach($m in @(Get-LocalGroupMember -Group $groupName -ErrorAction Stop)){"
-        "      if(($requestedSid -and $m.SID -and $m.SID.Value -eq $requestedSid.Value) -or ([string]$m.Name -ieq $requestedMember) -or (([string]$m.Name).Split('\\')[-1] -ieq ($requestedMember -split '\\')[-1])){$still=$true;break}"
-        "    }"
-        "  }catch{}"
-        "}else{"
-        "  try{"
-        "    $rels=@(Get-WmiObject Win32_GroupUser -ErrorAction Stop);$short=($requestedMember -split '\\')[-1];"
-        "    foreach($rel in $rels){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match ('Name=""{0}""' -f [regex]::Escape($groupName)) -and $pc -match ('Name=""{0}""' -f [regex]::Escape($short))){$still=$true;break}}"
-        "  }catch{}"
-        "};"
-        "if($still){throw 'Member is still present after net localgroup removal'};"
-        "return ('LAS-RESULT:'+(@{Status='Removed';Group=$groupName;Account=$requestedMember} | ConvertTo-Json -Compress))"
+        "try{"
+        "  if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "    foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){if($m.SID -and $m.SID.Value -ieq $targetSid){$still=$true;break}}"
+        "  }"
+        "}catch{};"
+        "if(-not $still){try{foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$pc=[string]$rel.PartComponent;if($pc -match ('SID=\"\"{0}\"\"' -f [regex]::Escape($targetSid))){$still=$true;break}}}catch{}};"
+        "if($still){throw ('Member is still present after SID removal: '+$targetSid)};"
+        "return ('LAS-RESULT:'+(@{Status='Removed';Group=$groupName;Account=$targetName;SID=$targetSid} | ConvertTo-Json -Compress))"
     )
 
 
