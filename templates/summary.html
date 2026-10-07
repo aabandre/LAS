@@ -913,7 +913,7 @@ function exportRemediationScript(){
         '}',
         '',
         '$results=@()',
-        '$total=0'
+        '$total=7'
     ];
 
     for(var i=0;i<remediationQueue.length;i++){
@@ -922,7 +922,6 @@ function exportRemediationScript(){
             g=r.group.replace(/'/g,"''"),
             a=r.account.replace(/'/g,"''");
 
-        lines.push('$total++');
         lines.push('$current=Remove-LasMemberTarget -Computer \''+m+'\' -Group \''+g+'\' -Member \''+a+'\'');
         lines.push('$results += $current');
         lines.push('Write-Progress -Activity "LAS local admin remediation" -Status ("{0} {1} [{2}] {3}" -f $current.Computer,$current.Account,$current.Method,$current.Status) -PercentComplete ([math]::Min(100,[math]::Round(($results.Count/$total)*100)))');
