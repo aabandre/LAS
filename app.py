@@ -3660,13 +3660,12 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
         # Match the scanner's preferred local-group lookup first. This avoids
         # a WMI round trip when WinRM/LocalAccounts can resolve the built-in SID.
         group_name = ""
+        g = None
         try:
-            if str(group_sid).upper() == "S-1-5-32-544":
-                lg = c.Win32_Group(SID=group_sid)
-            else:
-                lg = c.Win32_Group(SID=group_sid)
-            if lg:
-                group_name = str(getattr(lg[0], "Name", "") or "")
+            groups = c.Win32_Group(SID=group_sid)
+            if groups:
+                g = groups[0]
+                group_name = str(getattr(g, "Name", "") or "")
         except Exception:
             group_name = ""
         if not group_name:
@@ -3733,11 +3732,6 @@ $memberSidText = __SID__
 $sid = New-Object System.Security.Principal.SecurityIdentifier($memberSidText)
 
 try {
-    if (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue) {
-        Remove-LocalGroupMember -Name $groupName -Member $sid -Confirm:$false -ErrorAction Stop
-        exit 0
-    }
-
     if (-not ("LasNetApi" -as [type])) {
         Add-Type @"
 using System;
@@ -3876,11 +3870,7 @@ def _build_remediation_winrm_script(group, account):
         "};"
         "if(-not $targetSid){throw ('Unable to resolve member SID: '+$requestedMember)};"
         "$sidObj=New-Object System.Security.Principal.SecurityIdentifier($targetSid);"
-        "$removed=$false;"
-        "if(Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue){"
-        "  try{Remove-LocalGroupMember -Name $groupName -Member $sidObj -Confirm:$false -ErrorAction Stop;$removed=$true}catch{}"
-        "};"
-        "if(-not $removed){"
+        "if(-not ('LasNetApi' -as [type])){"
         "  if(-not ('LasNetApi' -as [type])){"
         "    Add-Type @'"
         "using System;"
