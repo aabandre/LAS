@@ -3620,7 +3620,7 @@ def _remove_local_group_member_rpc(machine, group, account, username="", passwor
         }
 
 
-def _remove_local_group_member_wmi(machine, group, account, username="", password="", domain=""):
+def _remove_local_group_member_wmi(machine, group, account, username="", password="", domain="", member_sid=""):
     """
     Credentialed WMI/DCOM fallback.
 
@@ -3640,6 +3640,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
     host = str(machine or "").strip()
     short_host = host.split(".")[0]
     requested = str(account or "").strip()
+    requested_sid_input = str(member_sid or "").strip()
     group_sid = _remediation_group_sid(group) or "S-1-5-32-544"
 
     try:
@@ -3660,7 +3661,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
         g = groups[0]
         group_name = str(getattr(g, "Name", "") or group)
 
-        target_sid = requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(short_host, requested)
+        target_sid = requested_sid_input.upper() if requested_sid_input else (requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(short_host, requested))
 
         def get_members():
             items = []
@@ -3810,9 +3811,10 @@ catch {
         }
 
 
-def _build_remediation_winrm_script(group, account):
+def _build_remediation_winrm_script(group, account, member_sid=""):
     group_json = json.dumps(str(group or ""), ensure_ascii=False)
     account_json = json.dumps(str(account or ""), ensure_ascii=False)
+    member_sid_json = json.dumps(str(member_sid or ""), ensure_ascii=False)
     group_sid = _remediation_group_sid(group) or "S-1-5-32-544"
 
     # The target SID is the authoritative identity. This handles orphaned AD
@@ -3821,6 +3823,8 @@ def _build_remediation_winrm_script(group, account):
         "$ErrorActionPreference='Stop';"
         "$requestedGroup=" + group_json + ";"
         "$requestedMember=" + account_json + ";"
+        "$requestedMemberSid=" + member_sid_json + ";"
+        "if($requestedMemberSid){$requestedMember=$requestedMemberSid};"
         "$groupName=$null;"
         "try{"
         "  $g=Get-WmiObject Win32_Group -Filter " + json.dumps("SID='" + group_sid + "'") + " -ErrorAction Stop | Select-Object -First 1;"
@@ -3891,7 +3895,7 @@ def _build_remediation_winrm_script(group, account):
     )
 
 
-def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, auth_pass, auth_domain):
+def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, auth_pass, auth_domain, member_sid=""):
     start = time.time()
     attempts = []
 
@@ -3978,7 +3982,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
                 )
                 raw = scanner._run_ps(
                     session,
-                    _build_remediation_winrm_script(group, account),
+                    _build_remediation_winrm_script(group, account, member_sid),
                     machine,
                 )
                 text = str(raw or "")
@@ -4023,7 +4027,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
     try:
         progress("WMI/DCOM", "WMI")
         result = _remove_local_group_member_wmi(
-            machine, group, account, auth_user, auth_pass, auth_domain
+            machine, group, account, auth_user, auth_pass, auth_domain, member_sid
         )
         if result is not None:
             attempts.append({
@@ -4083,6 +4087,7 @@ async def api_remove_local_admin(request: Request):
     auth_user = str(body.get("username") or "").strip()
     auth_pass = str(body.get("password") or "")
     auth_domain = str(body.get("domain") or "").strip()
+    member_sid = str(body.get("sid") or "").strip()
 
     if not machine or not account:
         return JSONResponse({"error": "machine and account are required"}, status_code=400)
@@ -4105,12 +4110,13 @@ async def api_remove_local_admin(request: Request):
             "machine": machine,
             "account": account,
             "group": group,
+            "sid": member_sid,
         }
 
     remediation_executor.submit(
         _run_remediation_job,
         job_id, machine, account, group, use_ssl,
-        auth_user, auth_pass, auth_domain,
+        auth_user, auth_pass, auth_domain, member_sid,
     )
     return JSONResponse({
         "ok": True,
@@ -4120,6 +4126,7 @@ async def api_remove_local_admin(request: Request):
         "machine": machine,
         "account": account,
         "group": group,
+        "sid": member_sid,
     }, status_code=202)
 
 
