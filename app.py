@@ -458,7 +458,6 @@ def _build_machine_memberships(members):
         source_group = (m.get("source_group") or "").strip() or "(unknown local group)"
         grouped[source_group].append({
             "account": name,
-            "sid": m.get("sid", ""),
             "type": m.get("type", "unknown"),
             "is_builtin": bool(m.get("is_builtin", False)),
             "via_group": m.get("via_group", ""),
@@ -1377,10 +1376,10 @@ class Scanner:
                 else:
                     name = "Administrator"
             if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
-                names.append({"name": name, "type": obj_type, "sid": sid})
+                names.append({"name": name, "type": obj_type})
         return names
 
-    def _classify_member(self, name, obj_type, via_group=None, sid=""):
+    def _classify_member(self, name, obj_type, via_group=None):
         lower = name.lower()
         short = lower.split("\\")[-1] if "\\" in lower else lower
         is_builtin = short in BUILTIN_ADMINS
@@ -1388,7 +1387,6 @@ class Scanner:
             "name": name,
             "type": obj_type,
             "is_builtin": is_builtin,
-            "sid": str(sid or "").strip(),
         }
         if via_group:
             result["via_group"] = via_group
@@ -1829,7 +1827,7 @@ foreach ($groupName in $candidates) {
                                 typ = "User"
                             else:
                                 typ = "Account"
-                            result.append({"name": domain_and_name, "type": typ, "sid": sid_v, "source_group": source_group_label})
+                            result.append({"name": domain_and_name, "type": typ, "source_group": source_group_label})
                         if not resume:
                             break
                 except Exception as e:
@@ -1899,7 +1897,7 @@ foreach ($groupName in $candidates) {
                                 if key in seen_members:
                                     continue
                                 seen_members.add(key)
-                                members.append({"name": name, "type": member_type, "sid": sid_candidate, "source_group": group_name})
+                                members.append({"name": name, "type": member_type, "source_group": group_name})
 
                         try:
                             raw_assoc = group.associators()
@@ -1928,7 +1926,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": typ, "sid": sid_candidate, "source_group": group_name})
+                            members.append({"name": name, "type": typ, "source_group": group_name})
 
                         try:
                             gdom = getattr(group, "Domain", None) or short_host
@@ -1964,7 +1962,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": ptype, "sid": sid_candidate, "source_group": group_name})
+                            members.append({"name": name, "type": ptype, "source_group": group_name})
 
                         try:
                             sid_like = sid.replace('"', '\"')
@@ -1998,7 +1996,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": ptype, "sid": sid_candidate, "source_group": group_name})
+                            members.append({"name": name, "type": ptype, "source_group": group_name})
 
                         if not rels and not sid_rels:
                             try:
@@ -2040,7 +2038,7 @@ foreach ($groupName in $candidates) {
                                 if key in seen_members:
                                     continue
                                 seen_members.add(key)
-                                members.append({"name": name, "type": ptype, "sid": sid_candidate, "source_group": group_name})
+                                members.append({"name": name, "type": ptype, "source_group": group_name})
 
                 for target_group in local_groups:
                     sid = target_group["sid"]
@@ -2083,7 +2081,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": typ, "sid": sid_candidate, "source_group": group_name})
+                            members.append({"name": name, "type": typ, "source_group": group_name})
 
                 if WIN32NET_AVAILABLE:
                     for target_group in local_groups:
@@ -2491,7 +2489,7 @@ foreach ($groupName in $candidates) {
                     src_group = None
                 if not name:
                     continue
-                classified_member = self._classify_member(name, typ, sid=entry.get("sid", "") if isinstance(entry, dict) else "")
+                classified_member = self._classify_member(name, typ)
                 if src_group:
                     classified_member["source_group"] = src_group
                 classified.append(classified_member)
@@ -3494,138 +3492,130 @@ def _verify_local_group_member_rpc(machine, group, account):
         return None
 
 
-def _remove_local_group_member_rpc(machine, group, account, username="", password="", domain=""):
+def _remove_local_group_member_rpc(machine, group, account):
     """
-    Credential-aware NetAPI fallback, using the same SMB/IPC session setup as
-    the scanner. Direct SID targets are deleted at NetAPI level 0 without any
-    SID-to-name lookup.
+    Remove by the member SID (NetAPI level 0) whenever possible.
+
+    This is important for stale/dead AD SIDs: a SID stored in the local SAM
+    does not need to resolve back to an AD object in order to be removed.
     """
     if not WIN32NET_AVAILABLE:
         return None
 
     server = "\\\\" + str(machine).split(".")[0]
     requested = str(account or "").strip()
-    connected_share = None
 
     try:
-        if password and WIN32NETCON_AVAILABLE:
-            user = str(username or "").strip()
-            dom = str(domain or "").strip()
-            candidates = []
-            if user:
-                if "\\" in user or "@" in user:
-                    candidates.append(user)
-                else:
-                    if dom:
-                        candidates.append(dom + "\\" + user)
-                    candidates.append(user)
-                    if dom:
-                        candidates.append(user + "@" + dom)
-            for cred in candidates:
-                try:
-                    remote = server + "\\IPC$"
-                    ui2 = {
-                        "remote": remote,
-                        "password": password,
-                        "username": cred,
-                        "asg_type": getattr(win32netcon, "USE_IPC", 3),
-                    }
-                    win32net.NetUseAdd(None, 2, ui2)
-                    connected_share = remote
-                    break
-                except Exception as exc:
-                    logger.debug("Remediation SMB session failed for %s/%s: %s", machine, cred, exc)
-
         group_name = _resolve_local_group_name_rpc(machine, group)
+        requested_sid = _member_sid_for_machine(machine, requested)
 
+        # For a raw SID, do not enumerate/resolve the member first.  This is
+        # required for orphaned AD SIDs that no longer resolve to an account.
         if requested.upper().startswith("S-"):
-            if not WIN32SECURITY_AVAILABLE:
-                raise RuntimeError("win32security is required for direct SID removal")
             target_sid = requested.upper()
-            sid_obj = win32security.ConvertStringSidToSid(target_sid)
             try:
-                win32net.NetLocalGroupDelMembers(server, group_name, 0, [{"sid": sid_obj}])
+                sid_obj = win32security.ConvertStringSidToSid(target_sid) if WIN32SECURITY_AVAILABLE else None
+                if sid_obj is None:
+                    raise RuntimeError("win32security is required for direct SID removal")
+                win32net.NetLocalGroupDelMembers(
+                    server, group_name, 0, [{"sid": sid_obj}]
+                )
             except Exception as delete_error:
-                try:
-                    remaining = _iter_local_group_members_rpc(server, group_name)
-                    still = any(
-                        (_remediation_sid_text(item.get("sid")) or "").upper() == target_sid
-                        for item in remaining
-                    )
-                except Exception:
-                    still = True
-                if not still:
+                verified = _verify_local_group_member_rpc(machine, group_name, target_sid)
+                if verified is False:
                     return {
                         "ok": True, "method": "RPC-NetAPI-SID",
                         "status": "AlreadyAbsent", "sid": target_sid,
                         "group_resolved": group_name,
                     }
                 raise delete_error
-
-            try:
-                remaining = _iter_local_group_members_rpc(server, group_name)
-                still = any(
-                    (_remediation_sid_text(item.get("sid")) or "").upper() == target_sid
-                    for item in remaining
-                )
-            except Exception:
-                return {
-                    "ok": True, "method": "RPC-NetAPI-SID",
-                    "status": "RemovedUnverified", "sid": target_sid,
-                    "account": requested, "group_resolved": group_name,
-                }
-
-            if not still:
+            verified = _verify_local_group_member_rpc(machine, group_name, target_sid)
+            if verified is False:
                 return {
                     "ok": True, "method": "RPC-NetAPI-SID",
                     "status": "Removed", "sid": target_sid,
                     "account": requested, "group_resolved": group_name,
                 }
+            if verified is True:
+                return {
+                    "ok": False, "method": "RPC-NetAPI-SID",
+                    "status": "StillPresent", "sid": target_sid,
+                    "account": requested, "group_resolved": group_name,
+                    "error": "Member is still present after NetAPI removal",
+                }
             return {
-                "ok": False, "method": "RPC-NetAPI-SID",
-                "status": "StillPresent", "sid": target_sid,
+                "ok": True, "method": "RPC-NetAPI-SID",
+                "status": "RemovedUnverified", "sid": target_sid,
                 "account": requested, "group_resolved": group_name,
-                "error": "Member is still present after NetAPI removal",
             }
 
         target_item = None
         for item in _iter_local_group_members_rpc(server, group_name):
-            if _rpc_member_matches(item, requested, ""):
+            if _rpc_member_matches(item, requested, requested_sid):
                 target_item = item
                 break
 
         if target_item is None:
             return {
-                "ok": True, "method": "RPC-NetAPI",
-                "status": "AlreadyAbsent", "group_resolved": group_name,
+                "ok": True,
+                "method": "RPC-NetAPI",
+                "status": "AlreadyAbsent",
+                "group_resolved": group_name,
             }
 
         target_sid = _remediation_sid_text(target_item.get("sid"))
         if target_sid and WIN32SECURITY_AVAILABLE:
             sid_obj = win32security.ConvertStringSidToSid(target_sid)
-            win32net.NetLocalGroupDelMembers(server, group_name, 0, [{"sid": sid_obj}])
+            # NetLocalGroupDelMembers level 0 removes by SID and therefore
+            # works even when LookupAccountSid/AD resolution fails.
+            win32net.NetLocalGroupDelMembers(
+                server, group_name, 0, [{"sid": sid_obj}]
+            )
         else:
             resolved_name = str(target_item.get("domainandname") or "").strip()
             if not resolved_name:
-                raise RuntimeError("Target member has no SID and no account name")
-            win32net.NetLocalGroupDelMembers(server, group_name, 3, [{"domainandname": resolved_name}])
+                raise RuntimeError(
+                    "Target member has no SID and no resolvable account name"
+                )
+            win32net.NetLocalGroupDelMembers(
+                server, group_name, 3, [{"domainandname": resolved_name}]
+            )
 
+        verified = _verify_local_group_member_rpc(machine, group_name, target_sid or requested)
+        if verified is False:
+            return {
+                "ok": True,
+                "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
+                "status": "Removed",
+                "account": requested,
+                "sid": target_sid,
+                "group_resolved": group_name,
+            }
+        if verified is True:
+            return {
+                "ok": False,
+                "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
+                "status": "StillPresent",
+                "account": requested,
+                "sid": target_sid,
+                "group_resolved": group_name,
+                "error": "Member is still present after NetAPI removal",
+            }
         return {
-            "ok": True, "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
-            "status": "Removed", "account": requested, "sid": target_sid,
+            "ok": True,
+            "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
+            "status": "RemovedUnverified",
+            "account": requested,
+            "sid": target_sid,
             "group_resolved": group_name,
         }
     except Exception as e:
         return {
-            "ok": False, "method": "RPC-NetAPI",
-            "status": "Failed", "error": str(e)[:1000],
+            "ok": False,
+            "method": "RPC-NetAPI",
+            "status": "Failed",
+            "error": str(e)[:1000],
         }
-    finally:
-        if connected_share and WIN32NETCON_AVAILABLE:
-            try:
-                win32net.NetUseDel(None, connected_share, 0)
-            except Exception:
-                pass
 
 
 def _remove_local_group_member_wmi(machine, group, account, username="", password="", domain=""):
@@ -3658,24 +3648,17 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
             namespace="root\\cimv2",
         )
 
-        # Match the scanner's preferred local-group lookup first. This avoids
-        # a WMI round trip when WinRM/LocalAccounts can resolve the built-in SID.
-        group_name = ""
-        g = None
-        try:
-            groups = c.Win32_Group(SID=group_sid)
-            if groups:
-                g = groups[0]
-                group_name = str(getattr(g, "Name", "") or "")
-        except Exception:
-            group_name = ""
-        if not group_name:
+        groups = c.Win32_Group(SID=group_sid)
+        if not groups:
             return {
                 "ok": False, "method": "WMI", "status": "Failed",
                 "error": "Local group with SID {} was not found".format(group_sid),
             }
 
-        target_sid = requested if requested.upper().startswith("S-") else ""
+        g = groups[0]
+        group_name = str(getattr(g, "Name", "") or group)
+
+        target_sid = _member_sid_for_machine(short_host, requested)
 
         def get_members():
             items = []
@@ -3733,6 +3716,11 @@ $memberSidText = __SID__
 $sid = New-Object System.Security.Principal.SecurityIdentifier($memberSidText)
 
 try {
+    if (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue) {
+        Remove-LocalGroupMember -Name $groupName -Member $sid -Confirm:$false -ErrorAction Stop
+        exit 0
+    }
+
     if (-not ("LasNetApi" -as [type])) {
         Add-Type @"
 using System;
@@ -3825,74 +3813,78 @@ def _build_remediation_winrm_script(group, account):
     account_json = json.dumps(str(account or ""), ensure_ascii=False)
     group_sid = _remediation_group_sid(group) or "S-1-5-32-544"
 
-    # Keep the deletion path aligned with the scanner:
-    # 1) resolve the well-known local group by SID,
-    # 2) use LocalAccounts/NetAPI on the target,
-    # 3) never translate an already supplied member SID to an AD name.
+    # The target SID is the authoritative identity. This handles orphaned AD
+    # SIDs that cannot be translated to DOMAIN\name.
     return (
         "$ErrorActionPreference='Stop';"
         "$requestedGroup=" + group_json + ";"
         "$requestedMember=" + account_json + ";"
-        "$groupSidText=" + json.dumps(group_sid) + ";"
         "$groupName=$null;"
-        "if(Get-Command Get-LocalGroup -ErrorAction SilentlyContinue){"
-        "  try{$gsid=New-Object System.Security.Principal.SecurityIdentifier($groupSidText);"
-        "      $lg=Get-LocalGroup -SID $gsid -ErrorAction Stop | Select-Object -First 1;"
-        "      if($lg){$groupName=[string]$lg.Name}}catch{}"
-        "};"
-        "if(-not $groupName -and Get-Command Get-LocalGroup -ErrorAction SilentlyContinue){"
-        "  try{$lg=Get-LocalGroup -Name $requestedGroup -ErrorAction Stop | Select-Object -First 1;"
-        "      if($lg){$groupName=[string]$lg.Name}}catch{}"
-        "};"
-        "if(-not $groupName){"
-        "  try{$g=Get-WmiObject Win32_Group -Filter " + json.dumps("LocalAccount=True AND SID='" + group_sid + "'") +
-        " -ErrorAction Stop | Select-Object -First 1;if($g){$groupName=[string]$g.Name}}catch{}"
+        "try{"
+        "  $g=Get-WmiObject Win32_Group -Filter " + json.dumps("SID='" + group_sid + "'") + " -ErrorAction Stop | Select-Object -First 1;"
+        "  if($g){$groupName=[string]$g.Name}"
+        "}catch{};"
+        "if(-not $groupName -and (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)){"
+        "  try{$lg=Get-LocalGroup | Where-Object {$_.Name -ieq $requestedGroup} | Select-Object -First 1;if($lg){$groupName=[string]$lg.Name}}catch{}"
         "};"
         "if(-not $groupName){throw ('Local group not found: '+$requestedGroup)};"
-        "$targetSid=$null;"
+        "$requestedSid=$null;"
+        "if($requestedMember -match '^S-[0-9-]+$'){$requestedSid=$requestedMember}"
+        "else{"
+        "  try{$requestedSid=([System.Security.Principal.NTAccount]$requestedMember).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{}"
+        "};"
+        "$targetSid=$requestedSid;"
         "$targetName=$requestedMember;"
-        "if($requestedMember -match '^S-[0-9-]+$'){"
-        "  $targetSid=$requestedMember"
-        "}else{"
-        "  if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
-        "    try{"
+        "if(-not $targetSid){"
+        "  try{"
+        "    if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
         "      foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){"
-        "        $mn=[string]$m.Name;$short=($mn -split [char]92)[-1];"
-        "        $want=($requestedMember -split [char]92)[-1];"
-        "        if(($mn -ieq $requestedMember) -or ($short -ieq $want)){"
-        "          if($m.SID){$targetSid=$m.SID.Value};if($mn){$targetName=$mn};break"
+        "        $msid=if($m.SID){$m.SID.Value}else{''};"
+        "        $mname=[string]$m.Name;"
+        "        if(($mname -ieq $requestedMember) -or ($mname -split [char]92)[-1] -ieq (($requestedMember -split [char]92)[-1])){"
+        "          $targetSid=$msid;if($mname){$targetName=$mname};break"
         "        }"
         "      }"
-        "    }catch{}"
-        "  }"
-        "  if(-not $targetSid){"
-        "    try{$targetSid=([System.Security.Principal.NTAccount]$requestedMember).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{}"
-        "  }"
+        "    }"
+        "  }catch{}"
         "};"
         "if(-not $targetSid){throw ('Unable to resolve member SID: '+$requestedMember)};"
+
+        # Do not require SID -> account translation or membership enumeration
+        # before deletion. NetAPI level 0 is authoritative for live and orphaned SIDs.
+                "if(-not ('LasNetApi' -as [type])){"
+        "  Add-Type @'"
+        "using System;"
+        "using System.Runtime.InteropServices;"
+        "public static class LasNetApi {"
+        "  [DllImport(\"Netapi32.dll\", CharSet=CharSet.Unicode)]"
+        "  public static extern int NetLocalGroupDelMembers(string servername,string localgroupname,int level,IntPtr buf,int totalentries);"
+        "}"
+        "'@"
+        "};"
         "$sidObj=New-Object System.Security.Principal.SecurityIdentifier($targetSid);"
-        "if(-not ('LasNetApi' -as [type])){"
-        "  Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class LasNetApi { [DllImport(\"Netapi32.dll\", CharSet=CharSet.Unicode, ExactSpelling=true)] public static extern int NetLocalGroupDelMembers(string servername,string localgroupname,int level,IntPtr buf,int totalentries); }';"
+        "$bytes=New-Object byte[] $sidObj.BinaryLength;"
+        "$sidObj.GetBinaryForm($bytes,0);"
+        "$sidPtr=[Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length);"
+        "$bufPtr=[Runtime.InteropServices.Marshal]::AllocHGlobal([IntPtr]::Size);"
+        "try{"
+        "  [Runtime.InteropServices.Marshal]::Copy($bytes,0,$sidPtr,$bytes.Length);"
+        "  [Runtime.InteropServices.Marshal]::WriteIntPtr($bufPtr,$sidPtr);"
+        "  $rc=[LasNetApi]::NetLocalGroupDelMembers($null,$groupName,0,$bufPtr,1);"
+        "  if([int]$rc -ne 0){$verifyPresent=$false;try{if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){if($m.SID -and $m.SID.Value -ieq $targetSid){$verifyPresent=$true;break}}}}catch{};if(-not $verifyPresent){try{foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match [regex]::Escape($groupName) -and $pc -match [regex]::Escape($targetSid)){$verifyPresent=$true;break}}}catch{}};if(-not $verifyPresent){return ('LAS-RESULT:'+(@{Status='AlreadyAbsent';Group=$groupName;Account=$targetName;SID=$targetSid} | ConvertTo-Json -Compress))};throw ('NetLocalGroupDelMembers failed with Win32 error '+[int]$rc)}"
+        "}finally{"
+        "  [Runtime.InteropServices.Marshal]::FreeHGlobal($bufPtr);"
+        "  [Runtime.InteropServices.Marshal]::FreeHGlobal($sidPtr)"
         "};"
-        "  $bytes=New-Object byte[] $sidObj.BinaryLength;"
-        "  $sidObj.GetBinaryForm($bytes,0);"
-        "  $sidPtr=[Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length);"
-        "  $bufPtr=[Runtime.InteropServices.Marshal]::AllocHGlobal([IntPtr]::Size);"
-        "  try{"
-        "    [Runtime.InteropServices.Marshal]::Copy($bytes,0,$sidPtr,$bytes.Length);"
-        "    [Runtime.InteropServices.Marshal]::WriteIntPtr($bufPtr,$sidPtr);"
-        "    $rc=[LasNetApi]::NetLocalGroupDelMembers($null,$groupName,0,$bufPtr,1);"
-        "    if([int]$rc -ne 0){"
-        "      if([int]$rc -eq 1378 -or [int]$rc -eq 1387){"
-        "        return ('LAS-RESULT:'+(@{Status='AlreadyAbsent';Group=$groupName;Account=$targetName;SID=$targetSid} | ConvertTo-Json -Compress))"
-        "      }"
-        "      throw ('NetLocalGroupDelMembers failed with Win32 error '+[int]$rc)"
-        "    }"
-        "  }finally{"
-        "    [Runtime.InteropServices.Marshal]::FreeHGlobal($bufPtr);"
-        "    [Runtime.InteropServices.Marshal]::FreeHGlobal($sidPtr)"
+        "Start-Sleep -Milliseconds 500;"
+        "$still=$false;"
+        "try{"
+        "  if(Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue){"
+        "    foreach($m in @(Get-LocalGroupMember -Name $groupName -ErrorAction Stop)){if($m.SID -and $m.SID.Value -ieq $targetSid){$still=$true;break}}"
         "  }"
-        "};"
+        "}catch{};"
+        "if(-not $still){try{foreach($rel in @(Get-WmiObject Win32_GroupUser -ErrorAction Stop)){$gc=[string]$rel.GroupComponent;$pc=[string]$rel.PartComponent;if($gc -match [regex]::Escape($groupName) -and $pc -match [regex]::Escape($targetSid)){$still=$true;break}}}catch{}};",
+        "if($still){throw ('Member is still present after SID removal: '+$targetSid)};"
         "return ('LAS-RESULT:'+(@{Status='Removed';Group=$groupName;Account=$targetName;SID=$targetSid} | ConvertTo-Json -Compress))"
     )
 
@@ -3917,66 +3909,41 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
         if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
             username = auth_domain + "\\" + username
 
-        # Reuse the scanner's host-candidate strategy and try both standard
-        # WinRM transports. Scanner probes 5985/5986 independently, while the
-        # old remediation path was pinned to the HTTP transport only.
-        candidates = [machine]
-        try:
-            domain_hint = str((scanner.config.get("ad_config") or {}).get("domain") or "").strip()
-            ip = dns_cache.resolve(machine, domain_hint=domain_hint)
-            candidates = scanner._host_candidates(machine, ip)
-        except Exception:
-            pass
+        if auth_user and auth_pass:
+            port = 5986 if use_ssl else 5985
+            scheme = "https" if use_ssl else "http"
+            target = scheme + "://" + machine + ":" + str(port)
+            session = winrm.Session(
+                target=target, auth=(username, auth_pass),
+                transport="ntlm", server_cert_validation="ignore",
+                read_timeout_sec=20, operation_timeout_sec=15,
+            )
+        else:
+            session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
 
-        last_error = None
-        for candidate in candidates:
-            transports = [bool(use_ssl), not bool(use_ssl)]
-            for ssl_mode in transports:
-                if auth_user and auth_pass:
-                    port = 5986 if ssl_mode else 5985
-                    scheme = "https" if ssl_mode else "http"
-                    target = scheme + "://" + candidate + ":" + str(port)
-                    session = winrm.Session(
-                        target=target, auth=(username, auth_pass),
-                        transport="ntlm", server_cert_validation="ignore",
-                        read_timeout_sec=25, operation_timeout_sec=20,
-                    )
-                else:
-                    session = scanner._make_session(candidate, comp_info={"os": ""}, use_ssl=ssl_mode)
-
+        raw = scanner._run_ps(
+            session, _build_remediation_winrm_script(group, account), machine
+        )
+        text = str(raw or "")
+        status = "Removed"
+        result_account = account
+        result_group = group
+        for line in text.splitlines():
+            if line.startswith("LAS-RESULT:"):
                 try:
-                    raw = scanner._run_ps(
-                        session, _build_remediation_winrm_script(group, account), candidate
-                    )
-                    text = str(raw or "")
-                    status = "Removed"
-                    result_account = account
-                    result_group = group
-                    result_sid = ""
-                    for line in text.splitlines():
-                        if line.startswith("LAS-RESULT:"):
-                            try:
-                                obj = json.loads(line[len("LAS-RESULT:"):])
-                                status = str(obj.get("Status") or status)
-                                result_account = str(obj.get("Account") or result_account)
-                                result_group = str(obj.get("Group") or result_group)
-                                result_sid = str(obj.get("SID") or "")
-                            except Exception:
-                                pass
-                    return {
-                        "ok": status not in ("Failed", "StillPresent"),
-                        "method": "WinRM-NetAPI-SID",
-                        "status": status,
-                        "account": result_account,
-                        "group": result_group,
-                        "sid": result_sid,
-                        "transport": "HTTPS" if ssl_mode else "HTTP",
-                        "computer_resolved": candidate,
-                    }
-                except Exception as exc:
-                    last_error = str(exc)[:1000]
-
-        raise RuntimeError(last_error or "WinRM remediation failed")
+                    obj = json.loads(line[len("LAS-RESULT:"):])
+                    status = str(obj.get("Status") or status)
+                    result_account = str(obj.get("Account") or result_account)
+                    result_group = str(obj.get("Group") or result_group)
+                except Exception:
+                    pass
+        return {
+            "ok": status not in ("Failed", "StillPresent"),
+            "method": "WinRM-NetAPI-SID",
+            "status": status,
+            "account": result_account,
+            "group": result_group,
+        }
 
     try:
         result = run_winrm()
@@ -4012,9 +3979,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
     # Last fallback: NetAPI. This remains useful when the LAS service itself
     # already runs under an account allowed to administer the target.
     try:
-        rpc_result = _remove_local_group_member_rpc(
-            machine, group, account, auth_user, auth_pass, auth_domain
-        )
+        rpc_result = _remove_local_group_member_rpc(machine, group, account)
         if rpc_result is not None:
             attempts.append({
                 "method": rpc_result.get("method", "RPC"),
