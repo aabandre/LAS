@@ -1376,10 +1376,10 @@ class Scanner:
                 else:
                     name = "Administrator"
             if name and "command completed" not in name.lower() and "команда выполнена" not in name.lower() and "успешно завершена" not in name.lower():
-                names.append({"name": name, "type": obj_type})
+                names.append({"name": name, "type": obj_type, "sid": sid})
         return names
 
-    def _classify_member(self, name, obj_type, via_group=None):
+    def _classify_member(self, name, obj_type, via_group=None, sid=""):
         lower = name.lower()
         short = lower.split("\\")[-1] if "\\" in lower else lower
         is_builtin = short in BUILTIN_ADMINS
@@ -1387,6 +1387,7 @@ class Scanner:
             "name": name,
             "type": obj_type,
             "is_builtin": is_builtin,
+            "sid": str(sid or "").strip(),
         }
         if via_group:
             result["via_group"] = via_group
@@ -1827,7 +1828,7 @@ foreach ($groupName in $candidates) {
                                 typ = "User"
                             else:
                                 typ = "Account"
-                            result.append({"name": domain_and_name, "type": typ, "source_group": source_group_label})
+                            result.append({"name": domain_and_name, "type": typ, "sid": sid_v, "source_group": source_group_label})
                         if not resume:
                             break
                 except Exception as e:
@@ -1897,7 +1898,7 @@ foreach ($groupName in $candidates) {
                                 if key in seen_members:
                                     continue
                                 seen_members.add(key)
-                                members.append({"name": name, "type": member_type, "source_group": group_name})
+                                members.append({"name": name, "type": member_type, "sid": sid_candidate, "source_group": group_name})
 
                         try:
                             raw_assoc = group.associators()
@@ -1926,7 +1927,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": typ, "source_group": group_name})
+                            members.append({"name": name, "type": typ, "sid": sid_candidate, "source_group": group_name})
 
                         try:
                             gdom = getattr(group, "Domain", None) or short_host
@@ -1962,7 +1963,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": ptype, "source_group": group_name})
+                            members.append({"name": name, "type": ptype, "sid": sid_candidate, "source_group": group_name})
 
                         try:
                             sid_like = sid.replace('"', '\"')
@@ -1996,7 +1997,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": ptype, "source_group": group_name})
+                            members.append({"name": name, "type": ptype, "sid": sid_candidate, "source_group": group_name})
 
                         if not rels and not sid_rels:
                             try:
@@ -2038,7 +2039,7 @@ foreach ($groupName in $candidates) {
                                 if key in seen_members:
                                     continue
                                 seen_members.add(key)
-                                members.append({"name": name, "type": ptype, "source_group": group_name})
+                                members.append({"name": name, "type": ptype, "sid": sid_candidate, "source_group": group_name})
 
                 for target_group in local_groups:
                     sid = target_group["sid"]
@@ -2081,7 +2082,7 @@ foreach ($groupName in $candidates) {
                             if key in seen_members:
                                 continue
                             seen_members.add(key)
-                            members.append({"name": name, "type": typ, "source_group": group_name})
+                            members.append({"name": name, "type": typ, "sid": sid_candidate, "source_group": group_name})
 
                 if WIN32NET_AVAILABLE:
                     for target_group in local_groups:
@@ -2489,7 +2490,7 @@ foreach ($groupName in $candidates) {
                     src_group = None
                 if not name:
                     continue
-                classified_member = self._classify_member(name, typ)
+                classified_member = self._classify_member(name, typ, sid=entry.get("sid", "") if isinstance(entry, dict) else "")
                 if src_group:
                     classified_member["source_group"] = src_group
                 classified.append(classified_member)
