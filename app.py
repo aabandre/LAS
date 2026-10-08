@@ -3657,17 +3657,25 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
             namespace="root\\cimv2",
         )
 
-        groups = c.Win32_Group(SID=group_sid)
-        if not groups:
+        # Match the scanner's preferred local-group lookup first. This avoids
+        # a WMI round trip when WinRM/LocalAccounts can resolve the built-in SID.
+        group_name = ""
+        try:
+            if str(group_sid).upper() == "S-1-5-32-544":
+                lg = c.Win32_Group(SID=group_sid)
+            else:
+                lg = c.Win32_Group(SID=group_sid)
+            if lg:
+                group_name = str(getattr(lg[0], "Name", "") or "")
+        except Exception:
+            group_name = ""
+        if not group_name:
             return {
                 "ok": False, "method": "WMI", "status": "Failed",
                 "error": "Local group with SID {} was not found".format(group_sid),
             }
 
-        g = groups[0]
-        group_name = str(getattr(g, "Name", "") or group)
-
-        target_sid = _member_sid_for_machine(short_host, requested)
+        target_sid = requested if requested.upper().startswith("S-") else ""
 
         def get_members():
             items = []
