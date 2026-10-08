@@ -986,7 +986,7 @@ function exportRemediationScript(){
         '$total='+remediationQueue.length,
     ];
     for(var i=0;i<remediationQueue.length;i++){
-        var r=remediationQueue[i],m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=r.account.replace(/'/g,"''");
+        var r=remediationQueue[i],m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=String(r.sid||r.account||"").replace(/'/g,"''");
         lines.push('$r=Remove-LasTarget -Computer \''+m+'\' -Group \''+g+'\' -Member \''+a+'\'');
         lines.push('$results+=$r');
         lines.push('Write-Host ("{0} {1} [{2}] {3}" -f $r.Computer,$r.Account,$r.Method,$r.Status)');
