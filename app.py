@@ -3645,7 +3645,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
     short_host = host.split(".")[0]
     requested = str(account or "").strip()
     requested_sid_input = str(member_sid or "").strip()
-    group_sid = _remediation_group_sid(group) or "S-1-5-32-544"
+    group_sid = _remediation_group_sid(group)
 
     try:
         c = wmi_module.WMI(
@@ -3655,11 +3655,14 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
             namespace="root\\cimv2",
         )
 
-        groups = c.Win32_Group(SID=group_sid)
+        if group_sid:
+            groups = c.Win32_Group(SID=group_sid)
+        else:
+            groups = c.Win32_Group(Name=group)
         if not groups:
             return {
                 "ok": False, "method": "WMI", "status": "Failed",
-                "error": "Local group with SID {} was not found".format(group_sid),
+                "error": "Local group '{}' was not found".format(group),
             }
 
         g = groups[0]
