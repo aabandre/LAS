@@ -3474,15 +3474,17 @@ def _rpc_member_matches(item, requested, requested_sid):
     return _remediation_account_key(name) == _remediation_account_key(requested)
 
 
-def _verify_local_group_member_rpc(machine, group, account):
+def _verify_local_group_member_rpc(machine, group, account, member_sid=""):
     if not WIN32NET_AVAILABLE:
         return None
     server = "\\\\" + str(machine).split(".")[0]
     requested = str(account or "").strip()
-    requested_sid_input = str(account or "").strip() if str(account or "").strip().upper().startswith("S-") else ""
+    requested_sid_input = str(member_sid or "").strip()
+    if not requested_sid_input and requested.upper().startswith("S-"):
+        requested_sid_input = requested
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
-        requested_sid = requested_sid_input.upper() if requested_sid_input else (requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested))
+        requested_sid = requested_sid_input.upper() if requested_sid_input else _member_sid_for_machine(machine, requested)
         for item in _iter_local_group_members_rpc(server, group_name):
             if _rpc_member_matches(item, requested, requested_sid):
                 return True
@@ -3533,7 +3535,7 @@ def _remove_local_group_member_rpc(machine, group, account, username="", passwor
                         "group_resolved": group_name,
                     }
                 raise delete_error
-            verified = _verify_local_group_member_rpc(machine, group_name, target_sid)
+            verified = _verify_local_group_member_rpc(machine, group_name, requested, target_sid)
             if verified is False:
                 return {
                     "ok": True, "method": "RPC-NetAPI-SID",
@@ -3585,7 +3587,7 @@ def _remove_local_group_member_rpc(machine, group, account, username="", passwor
                 server, group_name, 3, [{"domainandname": resolved_name}]
             )
 
-        verified = _verify_local_group_member_rpc(machine, group_name, target_sid or requested)
+        verified = _verify_local_group_member_rpc(machine, group_name, requested, target_sid)
         if verified is False:
             return {
                 "ok": True,
