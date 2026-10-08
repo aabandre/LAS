@@ -3479,6 +3479,7 @@ def _verify_local_group_member_rpc(machine, group, account):
         return None
     server = "\\\\" + str(machine).split(".")[0]
     requested = str(account or "").strip()
+    requested_sid_input = str(account or "").strip() if str(account or "").strip().upper().startswith("S-") else ""
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
         requested_sid = requested_sid_input.upper() if requested_sid_input else (requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested))
