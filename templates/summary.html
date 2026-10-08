@@ -835,7 +835,7 @@ function exportRemediationScript(){
         '',
         'function Remove-LasWinRm {',
         'param([string]$Computer,[string]$Group,[string]$Member)',
-        '$r=Invoke-Command -ComputerName $Computer -Credential $LasCredential -ScriptBlock $LasScriptBlock -ArgumentList $Group,$Member -ErrorAction Stop',
+        'try{$r=Invoke-Command -ComputerName $Computer -Credential $LasCredential -ScriptBlock $LasScriptBlock -ArgumentList $Group,$Member -ErrorAction Stop}catch{$r=Invoke-Command -ComputerName $Computer -UseSSL -Credential $LasCredential -ScriptBlock $LasScriptBlock -ArgumentList $Group,$Member -ErrorAction Stop}',
         '$r | Select-Object -Last 1',
         '}',
         '',
