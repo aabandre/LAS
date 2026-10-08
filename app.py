@@ -3510,7 +3510,7 @@ def _remove_local_group_member_rpc(machine, group, account, username="", passwor
 
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
-        requested_sid = requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested)
+        requested_sid = requested_sid_input.upper() if requested_sid_input else (requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested))
 
         # For a raw SID, do not enumerate/resolve the member first.  This is
         # required for orphaned AD SIDs that no longer resolve to an account.
