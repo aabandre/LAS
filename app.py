@@ -3678,10 +3678,10 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
                 items.append((full, name, sid))
             return items
 
-        if requested.upper().startswith("S-"):
+        if requested_sid_input or requested.upper().startswith("S-"):
             # An orphaned SID must be passed straight to the target; do not
             # require WMI/AD name resolution to discover it first.
-            target = ("", "", requested)
+            target = ("", "", target_sid)
         else:
             members = get_members()
             target = None
