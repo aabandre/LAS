@@ -1023,8 +1023,8 @@ function runRemediationQueue(){
         x.open("POST","/api/remediate/remove-local-admin",true);
         x.timeout=15000;x.setRequestHeader("Content-Type","application/json");
         function poll(jobId,started){
-            if(Date.now()-started>90000){
-                finishItem(r,{ok:false,status:"Failed",method:"TIMEOUT",error:"remediation job exceeded 90 seconds"});step();return;
+            if(Date.now()-started>120000){
+                finishItem(r,{ok:false,status:"Failed",method:"TIMEOUT",error:"remediation job exceeded 120 seconds"});step();return;
             }
             var p=new XMLHttpRequest();
             p.open("GET","/api/remediate/job/"+encodeURIComponent(jobId),true);p.timeout=10000;
@@ -1033,7 +1033,7 @@ function runRemediationQueue(){
                 if(p.status===200){
                     var rr={};try{rr=JSON.parse(p.responseText||"{}")}catch(e){}
                     if(rr.state==="running"||rr.status==="Running"){
-                        updateProgress(r.machine+" → "+r.account+" — Удаление");
+                        updateProgress(r.machine+" → "+r.account+" — "+(rr.current||"Удаление")+(rr.method?(" ["+rr.method+"]"):""));
                         setTimeout(function(){poll(jobId,started)},1000);return;
                     }
                     finishItem(r,rr);step();return;
