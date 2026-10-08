@@ -3909,41 +3909,90 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
         if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
             username = auth_domain + "\\" + username
 
-        if auth_user and auth_pass:
-            port = 5986 if use_ssl else 5985
-            scheme = "https" if use_ssl else "http"
-            target = scheme + "://" + machine + ":" + str(port)
-            session = winrm.Session(
-                target=target, auth=(username, auth_pass),
-                transport="ntlm", server_cert_validation="ignore",
-                read_timeout_sec=20, operation_timeout_sec=15,
-            )
-        else:
-            session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+        if not auth_user or not auth_pass:
+            raise RuntimeError("Remediation credentials are required")
 
-        raw = scanner._run_ps(
-            session, _build_remediation_winrm_script(group, account), machine
-        )
-        text = str(raw or "")
-        status = "Removed"
-        result_account = account
-        result_group = group
-        for line in text.splitlines():
-            if line.startswith("LAS-RESULT:"):
-                try:
-                    obj = json.loads(line[len("LAS-RESULT:"):])
-                    status = str(obj.get("Status") or status)
-                    result_account = str(obj.get("Account") or result_account)
-                    result_group = str(obj.get("Group") or result_group)
-                except Exception:
-                    pass
-        return {
-            "ok": status not in ("Failed", "StillPresent"),
-            "method": "WinRM-NetAPI-SID",
-            "status": status,
-            "account": result_account,
-            "group": result_group,
-        }
+        # Reuse the scanner's target/port discovery instead of assuming 5985.
+        # The scan already knows whether the host is reachable through 5985 or 5986.
+        try:
+            resolved_ip = dns_cache.resolve(machine, domain_hint=str(auth_domain or "").strip())
+        except Exception:
+            resolved_ip = None
+
+        candidates = scanner._host_candidates(machine, resolved_ip)
+        if not candidates:
+            candidates = [machine]
+
+        transport_candidates = []
+        seen = set()
+        for host in candidates:
+            try:
+                ports = scanner._probe_ports_fast(host)
+            except Exception:
+                ports = {}
+            available = []
+            if ports.get("5985_winrm"):
+                available.append(False)
+            if ports.get("5986_winrm_ssl"):
+                available.append(True)
+            # If probing is inconclusive, retain the requested transport and
+            # then try the other one. This mirrors the scanner's fallback model.
+            if not available:
+                available = [bool(use_ssl), not bool(use_ssl)]
+            for ssl_mode in available:
+                key = (str(host).lower(), bool(ssl_mode))
+                if key not in seen:
+                    seen.add(key)
+                    transport_candidates.append((host, bool(ssl_mode)))
+
+        if not transport_candidates:
+            transport_candidates = [(machine, bool(use_ssl)), (machine, not bool(use_ssl))]
+
+        errors = []
+        for target_host, ssl_mode in transport_candidates:
+            port = 5986 if ssl_mode else 5985
+            scheme = "https" if ssl_mode else "http"
+            target = scheme + "://" + str(target_host) + ":" + str(port)
+            try:
+                session = winrm.Session(
+                    target=target,
+                    auth=(username, auth_pass),
+                    transport="ntlm",
+                    server_cert_validation="ignore",
+                    read_timeout_sec=15,
+                    operation_timeout_sec=10,
+                )
+                raw = scanner._run_ps(
+                    session,
+                    _build_remediation_winrm_script(group, account),
+                    machine,
+                )
+                text = str(raw or "")
+                status = "Removed"
+                result_account = account
+                result_group = group
+                for line in text.splitlines():
+                    if line.startswith("LAS-RESULT:"):
+                        try:
+                            obj = json.loads(line[len("LAS-RESULT:"):])
+                            status = str(obj.get("Status") or status)
+                            result_account = str(obj.get("Account") or result_account)
+                            result_group = str(obj.get("Group") or result_group)
+                        except Exception:
+                            pass
+
+                return {
+                    "ok": status not in ("Failed", "StillPresent"),
+                    "method": "WinRM-NetAPI-SID" + ("-SSL" if ssl_mode else ""),
+                    "status": status,
+                    "account": result_account,
+                    "group": result_group,
+                    "target": target,
+                }
+            except Exception as e:
+                errors.append("{}: {}".format(target, str(e)[:300]))
+
+        raise RuntimeError("WinRM remediation failed: " + " | ".join(errors)[:1200])
 
     try:
         result = run_winrm()
