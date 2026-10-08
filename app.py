@@ -3904,6 +3904,17 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
         with remediation_jobs_lock:
             remediation_jobs[job_id] = result
 
+    def progress(message, method=""):
+        with remediation_jobs_lock:
+            current = remediation_jobs.get(job_id)
+            if current is not None:
+                current["state"] = "running"
+                current["status"] = "Running"
+                current["current"] = message
+                if method:
+                    current["method"] = method
+                current["elapsed_ms"] = round((time.time() - start) * 1000)
+
     def run_winrm():
         username = auth_user
         if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
@@ -3951,6 +3962,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
         errors = []
         for target_host, ssl_mode in transport_candidates:
             port = 5986 if ssl_mode else 5985
+            progress("WinRM " + str(target_host) + ":" + str(port), "WinRM")
             scheme = "https" if ssl_mode else "http"
             target = scheme + "://" + str(target_host) + ":" + str(port)
             try:
@@ -4007,6 +4019,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
     # it does not depend on the web server's process credentials and does not
     # enumerate the WinNT provider tree.
     try:
+        progress("WMI/DCOM", "WMI")
         result = _remove_local_group_member_wmi(
             machine, group, account, auth_user, auth_pass, auth_domain
         )
@@ -4028,6 +4041,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
     # Last fallback: NetAPI. This remains useful when the LAS service itself
     # already runs under an account allowed to administer the target.
     try:
+        progress("RPC/NetAPI", "RPC")
         rpc_result = _remove_local_group_member_rpc(
             machine, group, account, auth_user, auth_pass, auth_domain
         )
