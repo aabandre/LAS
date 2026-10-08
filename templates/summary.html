@@ -754,7 +754,18 @@ function queueAdminForRemoval(account){
         var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|"),machines=[];
         for(var mi=0;mi<machinesRaw.length;mi++){if(machinesRaw[mi])machines.push(machinesRaw[mi]);}
         for(var j=0;j<machines.length;j++){
-            remediationQueue.push({machine:machines[j],account:account,group:"Administrators",status:"pending"});
+            var sid="";
+            var md=(SD.machine_memberships||{})[machines[j]];
+            var gs=md&&md.groups?md.groups:{}, gi;
+            for(gi in gs){
+                if(!gs.hasOwnProperty(gi))continue;
+                var gm=gs[gi]||[];
+                for(var gj=0;gj<gm.length;gj++){
+                    if(String(gm[gj].account||"").toLowerCase()===String(account||"").toLowerCase() && gm[gj].sid){sid=String(gm[gj].sid);break;}
+                }
+                if(sid)break;
+            }
+            remediationQueue.push({machine:machines[j],account:account,sid:sid,group:"Administrators",status:"pending"});
         }
         break;
     }
@@ -767,7 +778,14 @@ function queueSelectedAdmins(){
         var chk=rows[i].querySelector(".admin-row-chk"); if(!chk||!chk.checked)continue;
         var account=rows[i].getAttribute("data-account")||"";
         var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|");
-        for(var j=0;j<machinesRaw.length;j++){if(machinesRaw[j]){remediationQueue.push({machine:machinesRaw[j],account:account,group:"Administrators",status:"pending"});added++;}}
+        for(var j=0;j<machinesRaw.length;j++){if(machinesRaw[j]){
+            var sid="",md=(SD.machine_memberships||{})[machinesRaw[j]],gs=md&&md.groups?md.groups:{},gi;
+            for(gi in gs){if(!gs.hasOwnProperty(gi))continue;var gm=gs[gi]||[];
+                for(var gj=0;gj<gm.length;gj++){if(String(gm[gj].account||"").toLowerCase()===String(account||"").toLowerCase()&&gm[gj].sid){sid=String(gm[gj].sid);break;}}
+                if(sid)break;
+            }
+            remediationQueue.push({machine:machinesRaw[j],account:account,sid:sid,group:"Administrators",status:"pending"});added++;
+        }}
     }
     renderRemediationQueue();
     if(!added)alert(t("rem_nothing_selected"));
@@ -1056,7 +1074,7 @@ function runRemediationQueue(){
         };
         x.ontimeout=function(){finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"remediation request timeout"});step()};
         x.onerror=function(){finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"network error"});step()};
-        x.send(JSON.stringify({machine:r.machine,account:r.account,group:r.group,domain:val("remDomain"),username:val("remUser"),password:val("remPass")}));
+        x.send(JSON.stringify({machine:r.machine,account:r.account,sid:r.sid||"",group:r.group,domain:val("remDomain"),username:val("remUser"),password:val("remPass")}));
     }
     updateProgress("");step();
 }
