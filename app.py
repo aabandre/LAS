@@ -3934,41 +3934,66 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
         if auth_user and auth_pass and auth_domain and ("\\" not in username and "@" not in username):
             username = auth_domain + "\\" + username
 
-        if auth_user and auth_pass:
-            port = 5986 if use_ssl else 5985
-            scheme = "https" if use_ssl else "http"
-            target = scheme + "://" + machine + ":" + str(port)
-            session = winrm.Session(
-                target=target, auth=(username, auth_pass),
-                transport="ntlm", server_cert_validation="ignore",
-                read_timeout_sec=20, operation_timeout_sec=15,
-            )
-        else:
-            session = scanner._make_session(machine, comp_info={"os": ""}, use_ssl=use_ssl)
+        # Reuse the scanner's host-candidate strategy and try both standard
+        # WinRM transports. Scanner probes 5985/5986 independently, while the
+        # old remediation path was pinned to the HTTP transport only.
+        candidates = [machine]
+        try:
+            domain_hint = str((scanner.config.get("ad_config") or {}).get("domain") or "").strip()
+            ip = dns_cache.resolve(machine, domain_hint=domain_hint)
+            candidates = scanner._host_candidates(machine, ip)
+        except Exception:
+            pass
 
-        raw = scanner._run_ps(
-            session, _build_remediation_winrm_script(group, account), machine
-        )
-        text = str(raw or "")
-        status = "Removed"
-        result_account = account
-        result_group = group
-        for line in text.splitlines():
-            if line.startswith("LAS-RESULT:"):
+        last_error = None
+        for candidate in candidates:
+            transports = [bool(use_ssl), not bool(use_ssl)]
+            for ssl_mode in transports:
+                if auth_user and auth_pass:
+                    port = 5986 if ssl_mode else 5985
+                    scheme = "https" if ssl_mode else "http"
+                    target = scheme + "://" + candidate + ":" + str(port)
+                    session = winrm.Session(
+                        target=target, auth=(username, auth_pass),
+                        transport="ntlm", server_cert_validation="ignore",
+                        read_timeout_sec=25, operation_timeout_sec=20,
+                    )
+                else:
+                    session = scanner._make_session(candidate, comp_info={"os": ""}, use_ssl=ssl_mode)
+
                 try:
-                    obj = json.loads(line[len("LAS-RESULT:"):])
-                    status = str(obj.get("Status") or status)
-                    result_account = str(obj.get("Account") or result_account)
-                    result_group = str(obj.get("Group") or result_group)
-                except Exception:
-                    pass
-        return {
-            "ok": status not in ("Failed", "StillPresent"),
-            "method": "WinRM-NetAPI-SID",
-            "status": status,
-            "account": result_account,
-            "group": result_group,
-        }
+                    raw = scanner._run_ps(
+                        session, _build_remediation_winrm_script(group, account), candidate
+                    )
+                    text = str(raw or "")
+                    status = "Removed"
+                    result_account = account
+                    result_group = group
+                    result_sid = ""
+                    for line in text.splitlines():
+                        if line.startswith("LAS-RESULT:"):
+                            try:
+                                obj = json.loads(line[len("LAS-RESULT:"):])
+                                status = str(obj.get("Status") or status)
+                                result_account = str(obj.get("Account") or result_account)
+                                result_group = str(obj.get("Group") or result_group)
+                                result_sid = str(obj.get("SID") or "")
+                            except Exception:
+                                pass
+                    return {
+                        "ok": status not in ("Failed", "StillPresent"),
+                        "method": "WinRM-NetAPI-SID",
+                        "status": status,
+                        "account": result_account,
+                        "group": result_group,
+                        "sid": result_sid,
+                        "transport": "HTTPS" if ssl_mode else "HTTP",
+                        "computer_resolved": candidate,
+                    }
+                except Exception as exc:
+                    last_error = str(exc)[:1000]
+
+        raise RuntimeError(last_error or "WinRM remediation failed")
 
     try:
         result = run_winrm()
