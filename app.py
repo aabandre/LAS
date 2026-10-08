@@ -3481,7 +3481,7 @@ def _verify_local_group_member_rpc(machine, group, account):
     requested = str(account or "").strip()
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
-        requested_sid = requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested)
+        requested_sid = requested_sid_input.upper() if requested_sid_input else (requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested))
         for item in _iter_local_group_members_rpc(server, group_name):
             if _rpc_member_matches(item, requested, requested_sid):
                 return True
@@ -3494,7 +3494,7 @@ def _verify_local_group_member_rpc(machine, group, account):
         return None
 
 
-def _remove_local_group_member_rpc(machine, group, account, username="", password="", domain=""):
+def _remove_local_group_member_rpc(machine, group, account, username="", password="", domain="", member_sid=""):
     """
     Remove by the member SID (NetAPI level 0) whenever possible.
 
@@ -3506,6 +3506,7 @@ def _remove_local_group_member_rpc(machine, group, account, username="", passwor
 
     server = "\\\\" + str(machine).split(".")[0]
     requested = str(account or "").strip()
+    requested_sid_input = str(member_sid or "").strip()
 
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
@@ -3513,8 +3514,8 @@ def _remove_local_group_member_rpc(machine, group, account, username="", passwor
 
         # For a raw SID, do not enumerate/resolve the member first.  This is
         # required for orphaned AD SIDs that no longer resolve to an account.
-        if requested.upper().startswith("S-"):
-            target_sid = requested.upper()
+        if requested_sid:
+            target_sid = requested_sid
             try:
                 sid_obj = win32security.ConvertStringSidToSid(target_sid) if WIN32SECURITY_AVAILABLE else None
                 if sid_obj is None:
@@ -4049,7 +4050,7 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
     try:
         progress("RPC/NetAPI", "RPC")
         rpc_result = _remove_local_group_member_rpc(
-            machine, group, account, auth_user, auth_pass, auth_domain
+            machine, group, account, auth_user, auth_pass, auth_domain, member_sid
         )
         if rpc_result is not None:
             attempts.append({
