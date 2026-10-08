@@ -284,7 +284,7 @@
                     <button onclick="setRiskSeverityFilter('medium')" id="riskBtnMedium" data-i18n="sev_medium">Medium</button>
                     <button onclick="setRiskSeverityFilter('low')" id="riskBtnLow" data-i18n="sev_low">Low</button>
                 </div>
-                <div class="search-box"><input type="text" id="riskySearch" placeholder="Search..." onkeyup="filterGrid('riskyGrid\',\'riskySearch')"></div>
+                <div class="search-box"><input type="text" id="riskySearch" placeholder="Search..." onkeyup="filterGrid('riskyGrid','riskySearch')"></div>
                 <div class="risky-grid" id="riskyGrid"></div>
             </div>
         </div>
@@ -565,7 +565,7 @@ function renderStickyKpis(){
         {v:d.risky_machines_count||0,l:t("kpi_risky_hosts")},
         {v:d.unique_admin_accounts||0,l:t("kpi_unique_admins")}
     ],h="";
-    for(var i=0;i<items.length;i++)h+='<div class="kpi-chip"><b>\'+items[i].v+\'</b><span>\'+items[i].l+\'</span></div>';
+    for(var i=0;i<items.length;i++)h+='<div class="kpi-chip"><b>'+items[i].v+'</b><span>'+items[i].l+'</span></div>';
     $("stickyKpis").innerHTML=h;
 }
 function renderWidgetBoard(){
@@ -580,7 +580,7 @@ function renderWidgetBoard(){
     if(!order||!order.length)order=["overview","risk","perf","data"];
     var h="";
     for(i=0;i<order.length;i++){if(!map[order[i]])continue;var it=map[order[i]];
-        h+='<div class="widget" draggable="true" data-widget-id="\'+it.id+\'"><div class="widget-head"><b>\'+it.title+\'</b><span>::</span></div><div class="widget-body">\'+it.txt+\'</div></div>';
+        h+='<div class="widget" draggable="true" data-widget-id="'+it.id+'"><div class="widget-head"><b>'+it.title+'</b><span>::</span></div><div class="widget-body">'+it.txt+'</div></div>';
     }
     $("widgetBoard").innerHTML=h;bindWidgetDnD();
 }
@@ -658,7 +658,7 @@ function renderAdmins(){var admins=SD.top_admins||[],html="";
             +"<td><input type=\"checkbox\" class=\"admin-row-chk\"></td><td>"+(i+1)+"</td><td>"+accountSafe+" "+tag+"</td><td>"+tag+"</td>"
             +"<td style=\"text-align:center;font-weight:bold\">"+a.machine_count+"</td>"
             +"<td class=\"via-cell\" title=\""+via.replace(/\"/g,"&quot;")+"\">"+viaView+"</td><td><div class=\"machines-cell\" title=\""+mList.replace(/\"/g,"&quot;")+"\">"+machinesView+"</div></td>"
-            +"<td><button class=\"mini-danger\" onclick=\"queueAdminForRemoval('"+(a.account||"").replace(/\'/g,"\\'")+"')\">"+t("act_queue")+"</button></td></tr>"}
+            +"<td><button class=\"mini-danger\" onclick=\"queueAdminForRemoval('"+(a.account||"").replace(/'/g,"\\'")+"')\">"+t("act_queue")+"</button></td></tr>"}
     $("adminBody").innerHTML=html;$("adminTotal").innerHTML=admins.length;$("adminShowing").innerHTML=admins.length;adminCurrentPage=1;filterAdmins()}
 
 function filterAdmins(){var st=val("adminSearch").toLowerCase(),mf=val("machineFilter").toLowerCase(),hLA=$("hideLocalAdmin")?$("hideLocalAdmin").checked:false,hBI=$("hideAllBuiltin")?$("hideAllBuiltin").checked:false,oCU=$("showOnlyCustom")?$("showOnlyCustom").checked:false,oVG=$("showOnlyViaGroup")?$("showOnlyViaGroup").checked:false,hGR=$("hideGroupHeaders")?$("hideGroupHeaders").checked:false,oLG=$("showOnlyLocalFromGroups")?$("showOnlyLocalFromGroups").checked:false;
@@ -691,10 +691,10 @@ function applyAdminDensity(){
 function renderAdminKpis(total,filtered){
     var box=$("adminKpis");if(!box)return;
     var pctVal=total?Math.round((filtered/total)*100):0;
-    box.innerHTML='<span class="admin-kpi">\'+t("adm_showing")+\': <b>\'+filtered+\'</b></span>'
-        +'<span class="admin-kpi">\'+t("card_total")+\': <b>\'+total+\'</b></span>'
-        +'<span class="admin-kpi">\'+t("kpi_coverage")+\': <b>\'+pctVal+\'%</b></span>'
-        +'<span class="admin-kpi">\'+t("kpi_page")+\': <b>\'+adminCurrentPage+\'</b></span>';
+    box.innerHTML='<span class="admin-kpi">'+t("adm_showing")+': <b>'+filtered+'</b></span>'
+        +'<span class="admin-kpi">'+t("card_total")+': <b>'+total+'</b></span>'
+        +'<span class="admin-kpi">'+t("kpi_coverage")+': <b>'+pctVal+'%</b></span>'
+        +'<span class="admin-kpi">'+t("kpi_page")+': <b>'+adminCurrentPage+'</b></span>';
 }
 
 function renderMachineFilter(){
@@ -703,8 +703,8 @@ function renderMachineFilter(){
     var mm=SD.machine_memberships||{},keys=[],k;
     for(k in mm){if(mm.hasOwnProperty(k))keys.push(k)}
     keys.sort();
-    var h='<option value="">\'+t("machine_all")+\'</option>';
-    for(var i=0;i<keys.length;i++)h+='<option value="\'+keys[i]+\'">\'+keys[i]+\'</option>';
+    var h='<option value="">'+t("machine_all")+'</option>';
+    for(var i=0;i<keys.length;i++)h+='<option value="'+keys[i]+'">'+keys[i]+'</option>';
     sel.innerHTML=h;
     if(current){sel.value=current}
     saveAdminFilters();
@@ -722,24 +722,24 @@ function filterMachineOptions(){
 function renderMachineDetails(){
     var box=$("machineDetailBox");if(!box)return;
     var machine=val("machineFilter");
-    if(!machine){box.innerHTML='<div style="color:#777">\'+t("machine_detail_empty")+\'</div>';return}
+    if(!machine){box.innerHTML='<div style="color:#777">'+t("machine_detail_empty")+'</div>';return}
     var mm=SD.machine_memberships||{},md=mm[machine];
-    if(!md){box.innerHTML='<div style="color:#777">\'+t("no_data")+\'</div>';return}
-    var h='<h4>\'+machine+\'</h4>';
-    h+='<div><b>OS:</b> \'+(md.os||\'-\')+\' | <b>Method:</b> \'+(md.method||\'-\')+\' | <b>Time:</b> \'+formatDuration(md.scan_time_sec||0)+\'</div>';
-    if(md.error){h+='<div style="margin-top:6px;color:#c0392b"><b>\'+t("machine_detail_error")+\':</b> \'+md.error+\'</div>';box.innerHTML=h;return}
-    h+='<div style="margin-top:6px"><b>\'+t("machine_detail_groups")+\':</b></div>';
+    if(!md){box.innerHTML='<div style="color:#777">'+t("no_data")+'</div>';return}
+    var h='<h4>'+machine+'</h4>';
+    h+='<div><b>OS:</b> '+(md.os||'-')+' | <b>Method:</b> '+(md.method||'-')+' | <b>Time:</b> '+formatDuration(md.scan_time_sec||0)+'</div>';
+    if(md.error){h+='<div style="margin-top:6px;color:#c0392b"><b>'+t("machine_detail_error")+':</b> '+md.error+'</div>';box.innerHTML=h;return}
+    h+='<div style="margin-top:6px"><b>'+t("machine_detail_groups")+':</b></div>';
     var groups=md.groups||{},gk=[],k;
     for(k in groups){if(groups.hasOwnProperty(k))gk.push(k)}
     gk.sort();
-    if(!gk.length){h+='<div class="machine-members">\'+t("no_data")+\'</div>';box.innerHTML=h;return}
+    if(!gk.length){h+='<div class="machine-members">'+t("no_data")+'</div>';box.innerHTML=h;return}
     for(var i=0;i<gk.length;i++){
         var g=gk[i],items=groups[g]||[];
-        h+='<div class="machine-group-block"><b>\'+g+\'</b><div class="machine-members">';
+        h+='<div class="machine-group-block"><b>'+g+'</b><div class="machine-members">';
         for(var j=0;j<items.length;j++){
             var it=items[j],line=it.account||'';
-            if(it.via_group)line+=' (via \'+it.via_group+\')';
-            h+='&bull; \'+line+\' [\'+(it.type||\'unknown\')+\']<br>';
+            if(it.via_group)line+=' (via '+it.via_group+')';
+            h+='&bull; '+line+' ['+(it.type||'unknown')+']<br>';
         }
         h+='</div></div>';
     }
@@ -802,11 +802,11 @@ function toggleSelectAllAdmins(state){
 }
 function renderRemediationQueue(){
     var box=$("remQueue");if(!box)return;
-    if(!remediationQueue.length){box.innerHTML='<div style="font-size:11px;color:#888">\'+t("rem_empty")+\'</div>';return}
+    if(!remediationQueue.length){box.innerHTML='<div style="font-size:11px;color:#888">'+t("rem_empty")+'</div>';return}
     var uniq={},arr=[],i,k,h="";
     for(i=0;i<remediationQueue.length;i++){k=remediationQueue[i].machine+"|"+remediationQueue[i].account+"|"+(remediationQueue[i].group||"");if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
     remediationQueue=arr;
-    for(i=0;i<arr.length;i++){var r=arr[i],st=r.status||"pending",label=st==="ok"?(r.resultStatus||t("rem_removed")):st==="fail"?t("rem_failed"):st==="running"?t("rem_running"):t("rem_pending");h+='<div class="rem-item"><b>\'+escapeHtml(r.machine)+\'</b> → \'+escapeHtml(r.account)+\' <span class="rem-status \'+st+\'">\'+escapeHtml(label)+\'</span></div>';}
+    for(i=0;i<arr.length;i++){var r=arr[i],st=r.status||"pending",label=st==="ok"?(r.resultStatus||t("rem_removed")):st==="fail"?t("rem_failed"):st==="running"?t("rem_running"):t("rem_pending");h+='<div class="rem-item"><b>'+escapeHtml(r.machine)+'</b> → '+escapeHtml(r.account)+' <span class="rem-status '+st+'">'+escapeHtml(label)+'</span></div>';}
     box.innerHTML=h;
 }
 function clearRemediationQueue(){remediationQueue=[];renderRemediationQueue();}
@@ -884,7 +884,7 @@ function exportRemediationScript(){
         'function Resolve-LasGroupName {',
         '  param([string]$RequestedGroup)',
         '  $g=$null',
-        '  try{$escapedGroup=$RequestedGroup.Replace("\'\'","\'\'\'\'");$g=Get-WmiObject Win32_Group -Filter ("Name=\'\'{0}\'\'" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1}catch{}',
+        `  try{$escapedGroup=$RequestedGroup.Replace("''","''''");$g=Get-WmiObject Win32_Group -Filter ("Name=''{0}''" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1}catch{}`,
         '  if($g -and $g.Name){return [string]$g.Name}',
         '  if(Get-Command Get-LocalGroup -ErrorAction SilentlyContinue){',
         '    try{$lg=Get-LocalGroup | Where-Object {$_.Name -ieq $RequestedGroup} | Select-Object -First 1;if($lg){return [string]$lg.Name}}catch{}',
@@ -928,7 +928,7 @@ function exportRemediationScript(){
         '      throw ("Unable to resolve member SID: "+$Member)',
         '    }',
         '    $groupName=$null',
-        '    try{$escapedGroup=$RequestedGroup.Replace("\'\'","\'\'\'\'");$g=Get-WmiObject Win32_Group -Filter ("Name=\'\'{0}\'\'" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1;if($g){$groupName=[string]$g.Name}}catch{}',
+        `    try{$escapedGroup=$RequestedGroup.Replace("''","''''");$g=Get-WmiObject Win32_Group -Filter ("Name=''{0}''" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1;if($g){$groupName=[string]$g.Name}}catch{}`,
         '    if(-not $groupName -and (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)){try{$lg=Get-LocalGroup | Where-Object {$_.Name -ieq $RequestedGroup} | Select-Object -First 1;if($lg){$groupName=[string]$lg.Name}}catch{}}',
         '    if(-not $groupName){throw ("Local group not found: "+$RequestedGroup)}',
         '    $targetSid=Resolve-LasMemberSid $groupName $TargetMember',
@@ -944,8 +944,8 @@ function exportRemediationScript(){
         '',
         'function Remove-LasWmi {',
         '  param([string]$Computer,[string]$Group,[string]$Member)',
-        '  $escapedGroup=$Group.Replace("\'\'","\'\'\'\'")',
-        '  $g=Get-WmiObject Win32_Group -ComputerName $Computer -Credential $LasCredential -Filter ("Name=\'\'{0}\'\'" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1',
+        `  $escapedGroup=$Group.Replace("''","''''")`,
+        `  $g=Get-WmiObject Win32_Group -ComputerName $Computer -Credential $LasCredential -Filter ("Name=''{0}''" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1`,
         '  if(-not $g){throw ("Local group not found through WMI: "+$Group)}',
         '  $groupName=[string]$g.Name',
         '  $sid=Resolve-LasMemberSid $groupName $Member',
@@ -990,8 +990,8 @@ function exportRemediationScript(){
         '$total='+remediationQueue.length,
     ];
     for(var i=0;i<remediationQueue.length;i++){
-        var r=remediationQueue[i],m=r.machine.replace(/'/g,"\'\'"),g=r.group.replace(/\'/g,"\'\'"),a=String(r.sid||r.account||"").replace(/\'/g,"\''");
-        lines.push('$r=Remove-LasTarget -Computer \'\'+m+\'\' -Group \'\'+g+\'\' -Member \'\'+a+\'\'');
+        var r=remediationQueue[i],m=r.machine.replace(/'/g,"''"),g=r.group.replace(/'/g,"''"),a=String(r.sid||r.account||"").replace(/'/g,"''");
+        lines.push('$r=Remove-LasTarget -Computer \''+m+'\' -Group \''+g+'\' -Member \''+a+'\'');
         lines.push('$results+=$r');
         lines.push('Write-Host ("{0} {1} [{2}] {3}" -f $r.Computer,$r.Account,$r.Method,$r.Status)');
         lines.push('if($r.Status -eq "Failed"){Write-Warning $r.Error}');
@@ -1168,7 +1168,7 @@ function exportFilteredAdminsCSV(){
 
         var vals=[account,typ,count,via,machines.join(", ")];
         for(var j=0;j<vals.length;j++){
-            vals[j]='"\'+String(vals[j]).replace(/"/g,\'""\')+\'"';
+            vals[j]='"'+String(vals[j]).replace(/"/g,'""')+'"';
         }
         lines.push(vals.join(","));
     }
