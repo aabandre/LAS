@@ -754,18 +754,18 @@ function queueAdminForRemoval(account){
         var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|"),machines=[];
         for(var mi=0;mi<machinesRaw.length;mi++){if(machinesRaw[mi])machines.push(machinesRaw[mi]);}
         for(var j=0;j<machines.length;j++){
-            var sid="";
-            var md=(SD.machine_memberships||{})[machines[j]];
-            var gs=md&&md.groups?md.groups:{}, gi;
+            var md=(SD.machine_memberships||{})[machines[j]],gs=md&&md.groups?md.groups:{},gi,matched=false;
             for(gi in gs){
                 if(!gs.hasOwnProperty(gi))continue;
                 var gm=gs[gi]||[];
                 for(var gj=0;gj<gm.length;gj++){
-                    if(String(gm[gj].account||"").toLowerCase()===String(account||"").toLowerCase() && gm[gj].sid){sid=String(gm[gj].sid);break;}
+                    if(String(gm[gj].account||"").toLowerCase()===String(account||"").toLowerCase()){
+                        remediationQueue.push({machine:machines[j],account:account,sid:String(gm[gj].sid||""),group:String(gi||"Administrators"),status:"pending"});
+                        matched=true;
+                    }
                 }
-                if(sid)break;
             }
-            remediationQueue.push({machine:machines[j],account:account,sid:sid,group:"Administrators",status:"pending"});
+            if(!matched)remediationQueue.push({machine:machines[j],account:account,sid:"",group:"Administrators",status:"pending"});
         }
         break;
     }
@@ -778,14 +778,17 @@ function queueSelectedAdmins(){
         var chk=rows[i].querySelector(".admin-row-chk"); if(!chk||!chk.checked)continue;
         var account=rows[i].getAttribute("data-account")||"";
         var machinesRaw=decodeURIComponent(rows[i].getAttribute("data-machines-raw")||"").split("|");
-        for(var j=0;j<machinesRaw.length;j++){if(machinesRaw[j]){
-            var sid="",md=(SD.machine_memberships||{})[machinesRaw[j]],gs=md&&md.groups?md.groups:{},gi;
+        for(var j=0;j<machinesRaw.length;j++){if(!machinesRaw[j])continue;
+            var md=(SD.machine_memberships||{})[machinesRaw[j]],gs=md&&md.groups?md.groups:{},gi,matched=false;
             for(gi in gs){if(!gs.hasOwnProperty(gi))continue;var gm=gs[gi]||[];
-                for(var gj=0;gj<gm.length;gj++){if(String(gm[gj].account||"").toLowerCase()===String(account||"").toLowerCase()&&gm[gj].sid){sid=String(gm[gj].sid);break;}}
-                if(sid)break;
+                for(var gj=0;gj<gm.length;gj++){
+                    if(String(gm[gj].account||"").toLowerCase()===String(account||"").toLowerCase()){
+                        remediationQueue.push({machine:machinesRaw[j],account:account,sid:String(gm[gj].sid||""),group:String(gi||"Administrators"),status:"pending"});added++;matched=true;
+                    }
+                }
             }
-            remediationQueue.push({machine:machinesRaw[j],account:account,sid:sid,group:"Administrators",status:"pending"});added++;
-        }}
+            if(!matched){remediationQueue.push({machine:machinesRaw[j],account:account,sid:"",group:"Administrators",status:"pending"});added++;}
+        }
     }
     renderRemediationQueue();
     if(!added)alert(t("rem_nothing_selected"));
@@ -801,7 +804,7 @@ function renderRemediationQueue(){
     var box=$("remQueue");if(!box)return;
     if(!remediationQueue.length){box.innerHTML='<div style="font-size:11px;color:#888">'+t("rem_empty")+'</div>';return}
     var uniq={},arr=[],i,k,h="";
-    for(i=0;i<remediationQueue.length;i++){k=remediationQueue[i].machine+"|"+remediationQueue[i].account;if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
+    for(i=0;i<remediationQueue.length;i++){k=remediationQueue[i].machine+"|"+remediationQueue[i].account+"|"+(remediationQueue[i].group||"");if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
     remediationQueue=arr;
     for(i=0;i<arr.length;i++){var r=arr[i],st=r.status||"pending",label=st==="ok"?(r.resultStatus||t("rem_removed")):st==="fail"?t("rem_failed"):st==="running"?t("rem_running"):t("rem_pending");h+='<div class="rem-item"><b>'+escapeHtml(r.machine)+'</b> → '+escapeHtml(r.account)+' <span class="rem-status '+st+'">'+escapeHtml(label)+'</span></div>';}
     box.innerHTML=h;
