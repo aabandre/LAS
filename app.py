@@ -458,6 +458,7 @@ def _build_machine_memberships(members):
         source_group = (m.get("source_group") or "").strip() or "(unknown local group)"
         grouped[source_group].append({
             "account": name,
+            "sid": m.get("sid", ""),
             "type": m.get("type", "unknown"),
             "is_builtin": bool(m.get("is_builtin", False)),
             "via_group": m.get("via_group", ""),
