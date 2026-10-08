@@ -3492,130 +3492,138 @@ def _verify_local_group_member_rpc(machine, group, account):
         return None
 
 
-def _remove_local_group_member_rpc(machine, group, account):
+def _remove_local_group_member_rpc(machine, group, account, username="", password="", domain=""):
     """
-    Remove by the member SID (NetAPI level 0) whenever possible.
-
-    This is important for stale/dead AD SIDs: a SID stored in the local SAM
-    does not need to resolve back to an AD object in order to be removed.
+    Credential-aware NetAPI fallback, using the same SMB/IPC session setup as
+    the scanner. Direct SID targets are deleted at NetAPI level 0 without any
+    SID-to-name lookup.
     """
     if not WIN32NET_AVAILABLE:
         return None
 
     server = "\\\\" + str(machine).split(".")[0]
     requested = str(account or "").strip()
+    connected_share = None
 
     try:
-        group_name = _resolve_local_group_name_rpc(machine, group)
-        requested_sid = _member_sid_for_machine(machine, requested)
+        if password and WIN32NETCON_AVAILABLE:
+            user = str(username or "").strip()
+            dom = str(domain or "").strip()
+            candidates = []
+            if user:
+                if "\\" in user or "@" in user:
+                    candidates.append(user)
+                else:
+                    if dom:
+                        candidates.append(dom + "\\" + user)
+                    candidates.append(user)
+                    if dom:
+                        candidates.append(user + "@" + dom)
+            for cred in candidates:
+                try:
+                    remote = server + "\\IPC$"
+                    ui2 = {
+                        "remote": remote,
+                        "password": password,
+                        "username": cred,
+                        "asg_type": getattr(win32netcon, "USE_IPC", 3),
+                    }
+                    win32net.NetUseAdd(None, 2, ui2)
+                    connected_share = remote
+                    break
+                except Exception as exc:
+                    logger.debug("Remediation SMB session failed for %s/%s: %s", machine, cred, exc)
 
-        # For a raw SID, do not enumerate/resolve the member first.  This is
-        # required for orphaned AD SIDs that no longer resolve to an account.
+        group_name = _resolve_local_group_name_rpc(machine, group)
+
         if requested.upper().startswith("S-"):
+            if not WIN32SECURITY_AVAILABLE:
+                raise RuntimeError("win32security is required for direct SID removal")
             target_sid = requested.upper()
+            sid_obj = win32security.ConvertStringSidToSid(target_sid)
             try:
-                sid_obj = win32security.ConvertStringSidToSid(target_sid) if WIN32SECURITY_AVAILABLE else None
-                if sid_obj is None:
-                    raise RuntimeError("win32security is required for direct SID removal")
-                win32net.NetLocalGroupDelMembers(
-                    server, group_name, 0, [{"sid": sid_obj}]
-                )
+                win32net.NetLocalGroupDelMembers(server, group_name, 0, [{"sid": sid_obj}])
             except Exception as delete_error:
-                verified = _verify_local_group_member_rpc(machine, group_name, target_sid)
-                if verified is False:
+                try:
+                    remaining = _iter_local_group_members_rpc(server, group_name)
+                    still = any(
+                        (_remediation_sid_text(item.get("sid")) or "").upper() == target_sid
+                        for item in remaining
+                    )
+                except Exception:
+                    still = True
+                if not still:
                     return {
                         "ok": True, "method": "RPC-NetAPI-SID",
                         "status": "AlreadyAbsent", "sid": target_sid,
                         "group_resolved": group_name,
                     }
                 raise delete_error
-            verified = _verify_local_group_member_rpc(machine, group_name, target_sid)
-            if verified is False:
+
+            try:
+                remaining = _iter_local_group_members_rpc(server, group_name)
+                still = any(
+                    (_remediation_sid_text(item.get("sid")) or "").upper() == target_sid
+                    for item in remaining
+                )
+            except Exception:
+                return {
+                    "ok": True, "method": "RPC-NetAPI-SID",
+                    "status": "RemovedUnverified", "sid": target_sid,
+                    "account": requested, "group_resolved": group_name,
+                }
+
+            if not still:
                 return {
                     "ok": True, "method": "RPC-NetAPI-SID",
                     "status": "Removed", "sid": target_sid,
                     "account": requested, "group_resolved": group_name,
                 }
-            if verified is True:
-                return {
-                    "ok": False, "method": "RPC-NetAPI-SID",
-                    "status": "StillPresent", "sid": target_sid,
-                    "account": requested, "group_resolved": group_name,
-                    "error": "Member is still present after NetAPI removal",
-                }
             return {
-                "ok": True, "method": "RPC-NetAPI-SID",
-                "status": "RemovedUnverified", "sid": target_sid,
+                "ok": False, "method": "RPC-NetAPI-SID",
+                "status": "StillPresent", "sid": target_sid,
                 "account": requested, "group_resolved": group_name,
+                "error": "Member is still present after NetAPI removal",
             }
 
         target_item = None
         for item in _iter_local_group_members_rpc(server, group_name):
-            if _rpc_member_matches(item, requested, requested_sid):
+            if _rpc_member_matches(item, requested, ""):
                 target_item = item
                 break
 
         if target_item is None:
             return {
-                "ok": True,
-                "method": "RPC-NetAPI",
-                "status": "AlreadyAbsent",
-                "group_resolved": group_name,
+                "ok": True, "method": "RPC-NetAPI",
+                "status": "AlreadyAbsent", "group_resolved": group_name,
             }
 
         target_sid = _remediation_sid_text(target_item.get("sid"))
         if target_sid and WIN32SECURITY_AVAILABLE:
             sid_obj = win32security.ConvertStringSidToSid(target_sid)
-            # NetLocalGroupDelMembers level 0 removes by SID and therefore
-            # works even when LookupAccountSid/AD resolution fails.
-            win32net.NetLocalGroupDelMembers(
-                server, group_name, 0, [{"sid": sid_obj}]
-            )
+            win32net.NetLocalGroupDelMembers(server, group_name, 0, [{"sid": sid_obj}])
         else:
             resolved_name = str(target_item.get("domainandname") or "").strip()
             if not resolved_name:
-                raise RuntimeError(
-                    "Target member has no SID and no resolvable account name"
-                )
-            win32net.NetLocalGroupDelMembers(
-                server, group_name, 3, [{"domainandname": resolved_name}]
-            )
+                raise RuntimeError("Target member has no SID and no account name")
+            win32net.NetLocalGroupDelMembers(server, group_name, 3, [{"domainandname": resolved_name}])
 
-        verified = _verify_local_group_member_rpc(machine, group_name, target_sid or requested)
-        if verified is False:
-            return {
-                "ok": True,
-                "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
-                "status": "Removed",
-                "account": requested,
-                "sid": target_sid,
-                "group_resolved": group_name,
-            }
-        if verified is True:
-            return {
-                "ok": False,
-                "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
-                "status": "StillPresent",
-                "account": requested,
-                "sid": target_sid,
-                "group_resolved": group_name,
-                "error": "Member is still present after NetAPI removal",
-            }
         return {
-            "ok": True,
-            "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
-            "status": "RemovedUnverified",
-            "account": requested,
-            "sid": target_sid,
+            "ok": True, "method": "RPC-NetAPI-SID" if target_sid else "RPC-NetAPI-Name",
+            "status": "Removed", "account": requested, "sid": target_sid,
             "group_resolved": group_name,
         }
     except Exception as e:
         return {
-            "ok": False,
-            "method": "RPC-NetAPI",
-            "status": "Failed",
-            "error": str(e)[:1000],
+            "ok": False, "method": "RPC-NetAPI",
+            "status": "Failed", "error": str(e)[:1000],
         }
+    finally:
+        if connected_share and WIN32NETCON_AVAILABLE:
+            try:
+                win32net.NetUseDel(None, connected_share, 0)
+            except Exception:
+                pass
 
 
 def _remove_local_group_member_wmi(machine, group, account, username="", password="", domain=""):
@@ -3998,7 +4006,9 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
     # Last fallback: NetAPI. This remains useful when the LAS service itself
     # already runs under an account allowed to administer the target.
     try:
-        rpc_result = _remove_local_group_member_rpc(machine, group, account)
+        rpc_result = _remove_local_group_member_rpc(
+            machine, group, account, auth_user, auth_pass, auth_domain
+        )
         if rpc_result is not None:
             attempts.append({
                 "method": rpc_result.get("method", "RPC"),
