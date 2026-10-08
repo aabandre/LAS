@@ -3658,7 +3658,7 @@ def _remove_local_group_member_wmi(machine, group, account, username="", passwor
         g = groups[0]
         group_name = str(getattr(g, "Name", "") or group)
 
-        target_sid = _member_sid_for_machine(short_host, requested)
+        target_sid = requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(short_host, requested)
 
         def get_members():
             items = []
