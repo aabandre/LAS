@@ -3479,7 +3479,7 @@ def _verify_local_group_member_rpc(machine, group, account):
     requested = str(account or "").strip()
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
-        requested_sid = _member_sid_for_machine(machine, requested)
+        requested_sid = requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested)
         for item in _iter_local_group_members_rpc(server, group_name):
             if _rpc_member_matches(item, requested, requested_sid):
                 return True
@@ -3492,7 +3492,7 @@ def _verify_local_group_member_rpc(machine, group, account):
         return None
 
 
-def _remove_local_group_member_rpc(machine, group, account):
+def _remove_local_group_member_rpc(machine, group, account, username="", password="", domain=""):
     """
     Remove by the member SID (NetAPI level 0) whenever possible.
 
@@ -3507,7 +3507,7 @@ def _remove_local_group_member_rpc(machine, group, account):
 
     try:
         group_name = _resolve_local_group_name_rpc(machine, group)
-        requested_sid = _member_sid_for_machine(machine, requested)
+        requested_sid = requested.upper() if requested.upper().startswith("S-") else _member_sid_for_machine(machine, requested)
 
         # For a raw SID, do not enumerate/resolve the member first.  This is
         # required for orphaned AD SIDs that no longer resolve to an account.
@@ -3979,7 +3979,9 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
     # Last fallback: NetAPI. This remains useful when the LAS service itself
     # already runs under an account allowed to administer the target.
     try:
-        rpc_result = _remove_local_group_member_rpc(machine, group, account)
+        rpc_result = _remove_local_group_member_rpc(
+            machine, group, account, auth_user, auth_pass, auth_domain
+        )
         if rpc_result is not None:
             attempts.append({
                 "method": rpc_result.get("method", "RPC"),
