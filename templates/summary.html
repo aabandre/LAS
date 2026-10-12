@@ -804,7 +804,7 @@ function renderRemediationQueue(){
     var box=$("remQueue");if(!box)return;
     if(!remediationQueue.length){box.innerHTML='<div style="font-size:11px;color:#888">'+t("rem_empty")+'</div>';return}
     var uniq={},arr=[],i,k,h="";
-    for(i=0;i<remediationQueue.length;i++){k=remediationQueue[i].machine+"|"+remediationQueue[i].account+"|"+(remediationQueue[i].group||"");if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
+    for(i=0;i<remediationQueue.length;i++){k=String(remediationQueue[i].machine||"").toLowerCase()+"|"+String(remediationQueue[i].account||"").toLowerCase()+"|"+String(remediationQueue[i].group||"").toLowerCase()+"|"+String(remediationQueue[i].sid||"").toUpperCase();if(!uniq[k]){uniq[k]=1;arr.push(remediationQueue[i]);}}
     remediationQueue=arr;
     for(i=0;i<arr.length;i++){var r=arr[i],st=r.status||"pending",label=st==="ok"?(r.resultStatus||t("rem_removed")):st==="fail"?t("rem_failed"):st==="running"?t("rem_running"):t("rem_pending");h+='<div class="rem-item"><b>'+escapeHtml(r.machine)+'</b> → '+escapeHtml(r.account)+' <span class="rem-status '+st+'">'+escapeHtml(label)+'</span></div>';}
     box.innerHTML=h;
