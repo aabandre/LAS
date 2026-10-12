@@ -884,7 +884,7 @@ function exportRemediationScript(){
         'function Resolve-LasGroupName {',
         '  param([string]$RequestedGroup)',
         '  $g=$null',
-        `  $groupSid=$null;if($RequestedGroup -match '^S-[0-9-]+$'){$groupSid=$RequestedGroup}elseif($RequestedGroup -ieq 'Administrators' -or $RequestedGroup -ieq 'Администраторы'){$groupSid='S-1-5-32-544'};if($groupSid){$g=Get-WmiObject Win32_Group -Filter (\"SID='{0}'\" -f $groupSid) -ErrorAction Stop | Select-Object -First 1}else{$escapedGroup=$RequestedGroup.Replace(\"'\",\"''\");$g=Get-WmiObject Win32_Group -Filter (\"Name='{0}'\" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1}` ,
+        `  $groupSid=$null;if($RequestedGroup -match '^S-[0-9-]+$'){$groupSid=$RequestedGroup}elseif($RequestedGroup -ieq 'Administrators'){$groupSid='S-1-5-32-544'};if($groupSid){$g=Get-WmiObject Win32_Group -Filter (\"SID='{0}'\" -f $groupSid) -ErrorAction Stop | Select-Object -First 1}else{$escapedGroup=$RequestedGroup.Replace(\"'\",\"''\");$g=Get-WmiObject Win32_Group -Filter (\"Name='{0}'\" -f $escapedGroup) -ErrorAction Stop | Select-Object -First 1}` ,
         '  if($g -and $g.Name){return [string]$g.Name}',
         '  if(Get-Command Get-LocalGroup -ErrorAction SilentlyContinue){',
         '    try{$lg=Get-LocalGroup | Where-Object {$_.Name -ieq $RequestedGroup} | Select-Object -First 1;if($lg){return [string]$lg.Name}}catch{}',
