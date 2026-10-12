@@ -732,26 +732,41 @@ def _run_remediation_job(job_id, machine, account, group, use_ssl, auth_user, au
                     _build_remediation_winrm_script(group, account, member_sid),
                     machine,
                 )
-                text = str(raw or "")
-                status = "Removed"
+                output_items = raw if isinstance(raw, (list, tuple)) else [raw]
+                status = "Failed"
                 result_account = account
                 result_group = group
-                for line in text.splitlines():
-                    if line.startswith("LAS-RESULT:"):
+                result_sid = member_sid or (account if str(account).upper().startswith("S-") else "")
+                parsed_result = False
+                for item in output_items:
+                    if isinstance(item, dict):
+                        line = str(item.get("Output") or item.get("output") or item)
+                    else:
+                        line = str(item or "")
+                    for output_line in line.splitlines():
+                        marker = "LAS-RESULT:"
+                        marker_pos = output_line.find(marker)
+                        if marker_pos < 0:
+                            continue
                         try:
-                            obj = json.loads(line[len("LAS-RESULT:"):])
-                            status = str(obj.get("Status") or status)
+                            obj = json.loads(output_line[marker_pos + len(marker):].strip())
+                            status = str(obj.get("Status") or "Failed")
                             result_account = str(obj.get("Account") or result_account)
                             result_group = str(obj.get("Group") or result_group)
-                        except Exception:
-                            pass
+                            result_sid = str(obj.get("SID") or result_sid)
+                            parsed_result = True
+                        except (ValueError, TypeError):
+                            continue
 
+                if not parsed_result:
+                    raise RuntimeError("PowerShell returned no LAS-RESULT marker: " + repr(raw)[:500])
                 return {
                     "ok": status not in ("Failed", "StillPresent"),
                     "method": "WinRM-NetAPI-SID" + ("-SSL" if ssl_mode else ""),
                     "status": status,
                     "account": result_account,
                     "group": result_group,
+                    "sid": result_sid,
                     "target": target,
                 }
             except Exception as e:
