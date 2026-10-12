@@ -1041,17 +1041,17 @@ function runRemediationQueue(){
         }
         var r=remediationQueue[i++];r.status="running";
         updateProgress(r.machine+" → "+r.account);
-        var x=new XMLHttpRequest();
+        var x=new XMLHttpRequest(),requestHandled=false;
         x.open("POST","/api/remediate/remove-local-admin",true);
         x.timeout=15000;x.setRequestHeader("Content-Type","application/json");
         function poll(jobId,started){
-            if(Date.now()-started>120000){
-                finishItem(r,{ok:false,status:"Failed",method:"TIMEOUT",error:"remediation job exceeded 120 seconds"});step();return;
+            if(Date.now()-started>300000){
+                finishItem(r,{ok:false,status:"Failed",method:"TIMEOUT",error:"remediation job exceeded 300 seconds"});step();return;
             }
-            var p=new XMLHttpRequest();
+            var p=new XMLHttpRequest(),pollHandled=false;
             p.open("GET","/api/remediate/job/"+encodeURIComponent(jobId),true);p.timeout=10000;
             p.onreadystatechange=function(){
-                if(p.readyState!==4)return;
+                if(p.readyState!==4||pollHandled)return;pollHandled=true;
                 if(p.status===200){
                     var rr={};try{rr=JSON.parse(p.responseText||"{}")}catch(e){}
                     if(rr.state==="running"||rr.status==="Running"){
@@ -1062,12 +1062,12 @@ function runRemediationQueue(){
                 }
                 setTimeout(function(){poll(jobId,started)},1500);
             };
-            p.ontimeout=function(){setTimeout(function(){poll(jobId,started)},1500)};
-            p.onerror=function(){setTimeout(function(){poll(jobId,started)},1500)};
+            p.ontimeout=function(){if(pollHandled)return;pollHandled=true;setTimeout(function(){poll(jobId,started)},1500)};
+            p.onerror=function(){if(pollHandled)return;pollHandled=true;setTimeout(function(){poll(jobId,started)},1500)};
             p.send();
         }
         x.onreadystatechange=function(){
-            if(x.readyState!==4)return;
+            if(x.readyState!==4||requestHandled)return;requestHandled=true;
             if(x.status===202||x.status===200){
                 var rr={};try{rr=JSON.parse(x.responseText||"{}")}catch(e){}
                 if(rr.job_id){poll(rr.job_id,Date.now());return;}
@@ -1076,8 +1076,8 @@ function runRemediationQueue(){
             var er={};try{er=JSON.parse(x.responseText||"{}")}catch(e){}
             finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:er.error||x.statusText||String(x.status)});step();
         };
-        x.ontimeout=function(){finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"remediation request timeout"});step()};
-        x.onerror=function(){finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"network error"});step()};
+        x.ontimeout=function(){if(requestHandled)return;requestHandled=true;finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"remediation request timeout"});step()};
+        x.onerror=function(){if(requestHandled)return;requestHandled=true;finishItem(r,{ok:false,status:"Failed",method:"HTTP",error:"network error"});step()};
         x.send(JSON.stringify({machine:r.machine,account:r.account,sid:r.sid||"",group:r.group,domain:val("remDomain"),username:val("remUser"),password:val("remPass")}));
     }
     updateProgress("");step();
