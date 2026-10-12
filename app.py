@@ -3337,9 +3337,6 @@ async def api_remove_local_admin(request: Request):
         member_sid = account.upper()
     if dry_run:
         return {"ok": True, "machine": machine, "account": account, "group": group, "dry_run": True}
-    if not auth_user or not auth_pass:
-        return JSONResponse({"error": "Remediation username and password are required"}, status_code=400)
-
     job_id = remediation_module.start_remediation_job(
         machine, account, group, use_ssl, auth_user, auth_pass, auth_domain, member_sid
     )
