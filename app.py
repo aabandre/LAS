@@ -2969,6 +2969,348 @@ foreach ($groupName in $candidates) {
 
 scanner = Scanner()
 
+# Remediation runs outside the FastAPI event loop. A target can be slow or
+# unreachable at the RPC/WMI layer without freezing the web UI.
+remediation_executor = ThreadPoolExecutor(max_workers=8)
+remediation_jobs = {}
+remediation_jobs_lock = threading.Lock()
+
+def _rebuild_admins_from_scan(summary_filename, summary_data):
+    ts = summary_filename.replace("summary_", "").replace(".json", "")
+    scan_filename = "scan_" + ts + ".json"
+    scan_path = os.path.join(scanner._results_dir, scan_filename)
+
+    if not os.path.isfile(scan_path):
+        scan_files = sorted(
+            glob.glob(os.path.join(scanner._results_dir, "scan_*.json")),
+            reverse=True,
+        )
+        if not scan_files:
+            return None
+        scan_path = scan_files[0]
+
+    try:
+        with open(scan_path, "r", encoding="utf-8") as f:
+            scan_data = json.load(f)
+    except Exception:
+        return None
+
+    results = scan_data.get("results", [])
+    if not results:
+        return None
+
+    member_to_computers = defaultdict(list)
+    member_via_groups = defaultdict(set)
+    member_types = defaultdict(set)
+    via_group_counts = defaultdict(int)
+    method_counts = defaultdict(int)
+    error_types = defaultdict(int)
+    os_counts = defaultdict(int)
+    port_stats = {
+        "winrm_open": 0, "winrm_ssl_open": 0,
+        "smb_open": 0, "rdp_open": 0, "all_closed": 0
+    }
+    severity_counts = defaultdict(int)
+    clean_machines = []
+    risky_machines = []
+    risky_details = {}
+    machine_risks = {}
+    machine_memberships = {}
+    scan_times = []
+    success_count = 0
+    error_count = 0
+
+    for res in results:
+        os_name = res.get("os", "") or "Unknown"
+        os_counts[os_name] += 1
+
+        ports = res.get("ports", {})
+        if ports.get("5985_winrm"):
+            port_stats["winrm_open"] += 1
+        if ports.get("5986_winrm_ssl"):
+            port_stats["winrm_ssl_open"] += 1
+        if ports.get("445_smb"):
+            port_stats["smb_open"] += 1
+        if ports.get("3389_rdp"):
+            port_stats["rdp_open"] += 1
+        if not any(ports.values()):
+            port_stats["all_closed"] += 1
+
+        if res.get("scan_time_sec"):
+            scan_times.append(res["scan_time_sec"])
+
+        if res.get("error"):
+            error_count += 1
+            machine_memberships[res["computer"]] = {
+                "os": res.get("os", ""),
+                "method": res.get("method", ""),
+                "scan_time_sec": res.get("scan_time_sec", 0),
+                "ports": res.get("ports", {}),
+                "error": res.get("error", ""),
+                "groups": {},
+            }
+            err = res["error"]
+            if "DNS failed" in err:
+                error_types["DNS failed"] += 1
+            elif "OFFLINE" in err:
+                error_types["Host offline"] += 1
+            elif "WinRM CLOSED" in err or "RPC enumeration failed" in err:
+                error_types["WinRM/RPC unavailable"] += 1
+            elif "Access" in err or "401" in err:
+                error_types["Access denied"] += 1
+            else:
+                error_types["Other"] += 1
+            continue
+
+        success_count += 1
+        method = res.get("method", "unknown")
+        method_counts[method] += 1
+
+        risk = res.get("risk") or {}
+        sev = risk.get("severity", "clean")
+        severity_counts[sev] += 1
+        machine_risks[res["computer"]] = risk
+        machine_memberships[res["computer"]] = {
+            "os": res.get("os", ""),
+            "method": res.get("method", ""),
+            "scan_time_sec": res.get("scan_time_sec", 0),
+            "ports": res.get("ports", {}),
+            "error": "",
+            "groups": _build_machine_memberships(res.get("members", [])),
+        }
+
+        has_nonbuiltin = False
+        nonbuiltin_names = []
+
+        for m in res.get("members", []):
+            name = m.get("name", "")
+            if not name:
+                continue
+
+            member_to_computers[name].append(res["computer"])
+
+            via = m.get("via_group", "")
+            if via:
+                member_via_groups[name].add(via)
+                via_group_counts[via] += 1
+
+            mtype = str(m.get("type", "") or "").strip()
+            if mtype:
+                member_types[name].add(mtype)
+
+            if not m.get("is_builtin", False):
+                has_nonbuiltin = True
+                nonbuiltin_names.append(name)
+
+        if has_nonbuiltin:
+            risky_machines.append(res["computer"])
+            risky_details[res["computer"]] = nonbuiltin_names
+        else:
+            clean_machines.append(res["computer"])
+
+    all_admins_sorted = sorted(
+        member_to_computers.items(),
+        key=lambda x: len(x[1]),
+        reverse=True,
+    )
+
+    avg_time = round(sum(scan_times) / len(scan_times), 2) if scan_times else 0
+    max_time = round(max(scan_times), 2) if scan_times else 0
+    min_time = round(min(scan_times), 2) if scan_times else 0
+
+    top_admins_list = []
+    for name, machines in all_admins_sorted:
+        lower = name.lower()
+        short = lower.split("\\")[-1] if "\\" in lower else lower
+        is_builtin = short in BUILTIN_ADMINS
+        is_local_admin = short in (
+            "administrator",
+            "\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440",
+        )
+
+        via_groups = sorted(member_via_groups.get(name, set()))
+
+        types_for_member = sorted(member_types.get(name, set()))
+        is_group_member = any("group" in t.lower() or "группа" in t.lower() or "nested" in t.lower() for t in types_for_member)
+
+        top_admins_list.append({
+            "account": name,
+            "machine_count": len(set(machines)),
+            "is_builtin": is_builtin,
+            "is_local_admin": is_local_admin,
+            "via_group": ", ".join(via_groups) if via_groups else "",
+            "type": "Group" if is_group_member else "User",
+            "machines": sorted(set(machines)),
+        })
+
+    top_groups = sorted(
+        via_group_counts.items(),
+        key=lambda x: x[1],
+        reverse=True,
+    )[:20]
+
+    rebuilt = {
+        "scan_timestamp": summary_data.get("scan_timestamp", ""),
+        "scan_id": summary_data.get("scan_id", ts),
+        "total_scanned": len(results),
+        "success": success_count,
+        "errors": error_count,
+        "error_breakdown": dict(error_types),
+        "method_breakdown": dict(method_counts),
+        "os_breakdown": dict(os_counts),
+        "port_statistics": port_stats,
+        "severity_breakdown": dict(severity_counts),
+        "unique_admin_accounts": len(member_to_computers),
+        "avg_scan_time_sec": avg_time,
+        "max_scan_time_sec": max_time,
+        "min_scan_time_sec": min_time,
+        "top_admins": top_admins_list,
+        "top_groups": [
+            {"group": name, "member_entries": count}
+            for name, count in top_groups
+        ],
+        "clean_machines_count": len(clean_machines),
+        "clean_machines": sorted(clean_machines),
+        "risky_machines_count": len(risky_machines),
+        "risky_machines": sorted(risky_machines),
+        "risky_details": risky_details,
+        "machine_risks": machine_risks,
+        "machine_memberships": machine_memberships,
+        "metrics": summary_data.get("metrics", {}),
+    }
+
+    return rebuilt
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    try:
+        return templates.TemplateResponse("index.html", {"request": request})
+    except Exception:
+        return HTMLResponse("<h1>Scanner running</h1>")
+
+
+@app.get("/summary", response_class=HTMLResponse)
+async def summary_page(request: Request):
+    try:
+        return templates.TemplateResponse("summary.html", {"request": request})
+    except Exception:
+        return HTMLResponse("<h1>Summary not found</h1>")
+
+
+@app.get("/api/summary")
+async def api_summary():
+    if scanner._last_summary:
+        return JSONResponse(content=scanner._last_summary)
+    return JSONResponse({"error": "No summary available"}, status_code=404)
+
+
+@app.get("/api/summary/load/{filename}")
+async def api_load_summary(filename: str):
+    safe = os.path.basename(filename)
+    path = os.path.join(scanner._results_dir, safe)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "File not found")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        scanner._last_summary = data
+        scanner._last_summary_file = safe
+        return JSONResponse(content=data)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/scans")
+async def api_list_scans():
+    results_dir = scanner._results_dir
+    scans = []
+    try:
+        for fname in sorted(os.listdir(results_dir), reverse=True):
+            fpath = os.path.join(results_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            size = os.path.getsize(fpath)
+            mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M:%S")
+            ftype = "unknown"
+            if fname.startswith("scan_") and fname.endswith(".json"):
+                ftype = "scan_json"
+            elif fname.startswith("scan_") and fname.endswith(".csv"):
+                ftype = "scan_csv"
+            elif fname.startswith("summary_") and fname.endswith(".json"):
+                ftype = "summary"
+            scans.append({
+                "filename": fname,
+                "type": ftype,
+                "size": size,
+                "modified": mtime,
+            })
+    except Exception as e:
+        logger.error("List scans error: %s", e)
+    return scans
+
+
+@app.get("/api/diff")
+async def api_diff(
+    scan1: str = Query(..., description="First summary filename"),
+    scan2: str = Query(..., description="Second summary filename"),
+):
+    def load_summary(fname):
+        path = os.path.join(scanner._results_dir, os.path.basename(fname))
+        if not os.path.isfile(path):
+            raise HTTPException(404, "File not found: " + fname)
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    s1 = load_summary(scan1)
+    s2 = load_summary(scan2)
+
+    def get_member_set(summary):
+        result = {}
+        for admin in summary.get("top_admins", []):
+            account = admin["account"]
+            for machine in admin.get("machines", []):
+                key = machine + "|" + account
+                result[key] = True
+        return set(result.keys())
+
+    set1 = get_member_set(s1)
+    set2 = get_member_set(s2)
+
+    added = sorted(set2 - set1)
+    removed = sorted(set1 - set2)
+    unchanged = sorted(set1 & set2)
+
+    def parse_entries(entries):
+        result = []
+        for e in entries:
+            parts = e.split("|", 1)
+            if len(parts) == 2:
+                result.append({"machine": parts[0], "account": parts[1]})
+        return result
+
+    return {
+        "scan1": scan1,
+        "scan2": scan2,
+        "scan1_date": s1.get("scan_timestamp", ""),
+        "scan2_date": s2.get("scan_timestamp", ""),
+        "added": parse_entries(added),
+        "removed": parse_entries(removed),
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "unchanged_count": len(unchanged),
+        "scan1_total": s1.get("total_scanned", 0),
+        "scan2_total": s2.get("total_scanned", 0),
+        "scan1_risky": s1.get("risky_machines_count", 0),
+        "scan2_risky": s2.get("risky_machines_count", 0),
+    }
+
+
+@app.get("/api/metrics")
+async def api_metrics():
+    return metrics.get_stats()
+
+
 remediation_module.configure(scanner, dns_cache, logger)
 
 
